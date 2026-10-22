@@ -1,20 +1,13 @@
-﻿param([switch]$NoPause)
+param([switch]$NoPause)
 $ErrorActionPreference = 'Stop'
 $installRoot = Join-Path $env:LOCALAPPDATA 'ACTextureConverter'
-$choiceKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.dds\UserChoice')
-$progId = if ($choiceKey) { try { [string]$choiceKey.GetValue('ProgId') } finally { $choiceKey.Dispose() } } else { '' }
-if ([string]::IsNullOrWhiteSpace($progId)) {
-    $extensionKey = [Microsoft.Win32.Registry]::ClassesRoot.OpenSubKey('.dds')
-    $progId = if ($extensionKey) { try { [string]$extensionKey.GetValue('') } finally { $extensionKey.Dispose() } } else { '' }
-}
-$validProgId = -not [string]::IsNullOrWhiteSpace($progId) -and -not $progId.StartsWith('\') -and -not $progId.EndsWith('\') -and $progId.Split('\') -notcontains '..'
-$key = if ($validProgId) { "HKCU:\Software\Classes\$progId\shell\ACTextureConverter" } else { '' }
+$supportedInputExtensions = @('.dds','.png','.tga','.bmp','.jpg','.jpeg','.tif','.tiff','.hdr')
+$menuKeys = @($supportedInputExtensions | ForEach-Object { "HKCU:\Software\Classes\SystemFileAssociations\$_\shell\ACTextureConverter" })
 $legacyMenuKey = 'HKCU:\Software\Classes\SystemFileAssociations\.dds\shell\ACTextureConverter'
 $createdRoot = $false
 $createdKey = $false
 
 try {
-    if ([string]::IsNullOrWhiteSpace($key)) { throw 'Windows has no usable .dds file type identifier.' }
     if (Test-Path -LiteralPath $installRoot) {
         throw "The installation folder already exists; nothing was overwritten: $installRoot. Run Uninstall-ACTextureConverter.bat first or back up/rename the folder."
     }
@@ -23,8 +16,10 @@ try {
     if ((Test-Path -LiteralPath $legacyRoot) -or (Test-Path -LiteralPath $legacyKey)) {
         throw 'A previous DDS Forge installation was found. Run Uninstall-ACTextureConverter.bat to remove its app files and Explorer entry, then install again. Your Texconv package and format settings are kept.'
     }
-    if ((Test-Path -LiteralPath $key) -or (Test-Path -LiteralPath $legacyMenuKey)) {
-        throw "The context-menu entry already exists; nothing was overwritten: $key. Run Uninstall.ps1 first."
+    $existingMenus = @($menuKeys | Where-Object { Test-Path -LiteralPath $_ })
+    if ($existingMenus.Count -or (Test-Path -LiteralPath $legacyMenuKey)) {
+        $existingMenu = if ($existingMenus.Count) { $existingMenus[0] } else { $legacyMenuKey }
+        throw "A context-menu entry already exists; nothing was overwritten: $existingMenu. Run Uninstall-ACTextureConverter.bat first."
     }
 
     $sourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -90,13 +85,14 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Could not register the Explorer context menu (exit code $LASTEXITCODE)." }
 
     Write-Host "AC Texture Converter installed: $installRoot" -ForegroundColor Green
-    Write-Host 'The entry appears in the Explorer context menu for DDS files (on Windows 11, it may be under “Show more options”).'
+    Write-Host 'The entry appears in the Explorer context menu for DDS, PNG, TGA, BMP, JPEG, TIFF, and HDR files (on Windows 11, it may be under “Show more options”).'
     if (-not $NoPause) { Write-Host 'Press any key to close this window.'; try { [void][Console]::ReadKey($true) } catch { } }
 } catch {
     Write-Host ''
     Write-Host "Installation failed: $($_.Exception.Message)" -ForegroundColor Red
-    if ($createdKey -and (Test-Path -LiteralPath $key)) { Remove-Item -LiteralPath $key -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($createdKey) { foreach ($menuKey in $menuKeys) { if (Test-Path -LiteralPath $menuKey) { Remove-Item -LiteralPath $menuKey -Recurse -Force -ErrorAction SilentlyContinue } } }
     if ($createdRoot -and (Test-Path -LiteralPath $installRoot)) { Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue }
     if (-not $NoPause) { Write-Host 'Press any key to close this window.'; try { [void][Console]::ReadKey($true) } catch { } }
     exit 1
 }
+

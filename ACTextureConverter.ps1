@@ -43,6 +43,8 @@ $script:FormatHints = @{
     'A8L8' = 'Legacy grayscale plus alpha: luminance comes from R; an existing A8L8/R8G8 source keeps its second channel as alpha. Use where the AC material expects AL 8.8.'
 }
 $script:SettingsPath = Join-Path (Join-Path $env:APPDATA 'DDSForge') 'settings.json'
+$script:SupportedInputExtensions = @('.dds','.png','.tga','.bmp','.jpg','.jpeg','.tif','.tiff','.hdr')
+$script:SupportedImageInputExtensions = @($script:SupportedInputExtensions | Where-Object { $_ -ne '.dds' })
 $script:EnabledFormats = @($script:BaseFormats.Values)
 $script:Formats = [ordered]@{}
 
@@ -83,6 +85,20 @@ function Get-DdsProgIds {
     return $progIds
 }
 
+function Get-ContextMenuTargets {
+    $targets = @($script:SupportedInputExtensions | ForEach-Object {
+        [pscustomobject]@{ ShellPath = "HKCU:\Software\Classes\SystemFileAssociations\$_\shell"; IsDds = ($_ -eq '.dds') }
+    })
+    foreach ($progId in (Get-DdsProgIds)) {
+        $targets += [pscustomobject]@{ ShellPath = "HKCU:\Software\Classes\$progId\shell"; IsDds = $true }
+    }
+    return @($targets | Group-Object ShellPath | ForEach-Object { $_.Group[0] })
+}
+
+function Get-ContextMenuShellPaths {
+    return @(Get-ContextMenuTargets | ForEach-Object { $_.ShellPath })
+}
+
 function Load-FormatSettings {
     $script:EnabledFormats = @($script:BaseFormats.Values)
     if (Test-Path -LiteralPath $script:SettingsPath -PathType Leaf) {
@@ -113,15 +129,13 @@ function Save-FormatSettings([string[]]$SelectedFormats) {
     [IO.File]::WriteAllText($script:SettingsPath, $json, (New-Object System.Text.UTF8Encoding($false)))
     $script:EnabledFormats = $valid
     Set-FormatList
-    $progIdMenu = "HKCU:\Software\Classes\$(Get-DdsProgId)\shell\ACTextureConverter"
-    $legacyMenu = 'HKCU:\Software\Classes\SystemFileAssociations\.dds\shell\ACTextureConverter'
-    if ((Test-Path -LiteralPath $progIdMenu) -or (Test-Path -LiteralPath $legacyMenu)) { Set-ExplorerContextMenu }
+    $menuInstalled = @(Get-ContextMenuShellPaths | Where-Object { Test-Path -LiteralPath (Join-Path $_ 'ACTextureConverter') }).Count -gt 0
+    if ($menuInstalled) { Set-ExplorerContextMenu }
 }
 
 function Set-ExplorerContextMenu([string]$TargetScript = '') {
-    $progId = Get-DdsProgId
-    $shellRelative = "Software\Classes\$progId\shell"
-    $shellRoots = @((Get-DdsProgIds | ForEach-Object { "HKCU:\Software\Classes\$_\shell" }) + 'HKCU:\Software\Classes\SystemFileAssociations\.dds\shell' | Select-Object -Unique)
+    $menuTargets = @(Get-ContextMenuTargets)
+    $shellRoots = @($menuTargets | ForEach-Object { $_.ShellPath })
     foreach ($shellPath in $shellRoots) {
         foreach ($existing in @(Get-ChildItem -LiteralPath $shellPath -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -eq 'ACTextureConverter' -or $_.PSChildName.StartsWith('ACTextureConverter_',[StringComparison]::OrdinalIgnoreCase) })) {
             Remove-Item -LiteralPath $existing.PSPath -Recurse -Force
@@ -134,7 +148,7 @@ function Set-ExplorerContextMenu([string]$TargetScript = '') {
         Remove-Item -LiteralPath $existing.PSPath -Recurse -Force
     }
     # Remove old definitions too, so the retired copy submenu cannot linger.
-    $menuDefinitions = @('ACTextureConverter.ContextMenu','ACTextureConverter.CopyMenu','ACTextureConverter.OverwriteMenu','ACTextureConverter.OverwriteOriginalMenu','ACTextureConverter.BackupMenu')
+    $menuDefinitions = @('ACTextureConverter.ContextMenu','ACTextureConverter.ImageContextMenu','ACTextureConverter.ConvertMenu','ACTextureConverter.CopyMenu','ACTextureConverter.OverwriteMenu','ACTextureConverter.OverwriteOriginalMenu','ACTextureConverter.BackupMenu')
     foreach ($definition in $menuDefinitions) {
         $definitionPath = "HKCU:\Software\Classes\$definition"
         if (Test-Path -LiteralPath $definitionPath) {
@@ -150,8 +164,7 @@ function Set-ExplorerContextMenu([string]$TargetScript = '') {
     function Set-ContextLeaf([string]$ParentPath, [string]$Id, [string]$Label, [string]$ScriptArguments, [string]$Executable, [bool]$UseExecutable) {
         $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("$ParentPath\$Id")
         $key.SetValue('MUIVerb', $Label, [Microsoft.Win32.RegistryValueKind]::String)
-        # A registry shell command gets one selected path through %1. Document
-        # lets Explorer invoke it once per file when several DDS files are selected.
+        # Document lets Explorer invoke the command once per selected file.
         $key.SetValue('MultiSelectModel', 'Document', [Microsoft.Win32.RegistryValueKind]::String)
         $commandKey = $key.CreateSubKey('command')
         if ($UseExecutable) { $commandLine = "`"$Executable`" $ScriptArguments -InputPath `"%1`"" }
@@ -177,22 +190,29 @@ function Set-ExplorerContextMenu([string]$TargetScript = '') {
         return New-MenuDefinition $MenuDefinition
     }
 
-    $rootPath = "$shellRelative\ACTextureConverter"
-    $rootKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($rootPath)
-    $rootKey.SetValue('MUIVerb', 'AC Texture Converter', [Microsoft.Win32.RegistryValueKind]::String)
-    $rootKey.SetValue('ExtendedSubCommandsKey', 'ACTextureConverter.ContextMenu', [Microsoft.Win32.RegistryValueKind]::String)
-    $rootKey.Dispose()
     $rootChildren = New-MenuDefinition 'ACTextureConverter.ContextMenu'
     # Prefix the internal verb IDs because Explorer enumerates these subcommands
     # by registry key name and ignores the shell order metadata for this cascade.
     $backupChildren = New-ContextGroup $rootChildren '01_Backup' 'Overwrite with Backup' 'ACTextureConverter.BackupMenu'
     $overwriteChildren = New-ContextGroup $rootChildren '02_OverwriteOriginal' 'Overwrite original' 'ACTextureConverter.OverwriteOriginalMenu'
     Set-ContextLeaf $rootChildren '03_Open' 'Open AC Texture Converter' '-OpenWith' $launcherPath $useExecutable
+    $imageRootChildren = New-MenuDefinition 'ACTextureConverter.ImageContextMenu'
+    $imageConvertChildren = New-ContextGroup $imageRootChildren '01_Convert' 'Convert to DDS-Converted' 'ACTextureConverter.ConvertMenu'
+    Set-ContextLeaf $imageRootChildren '02_Open' 'Open AC Texture Converter' '-OpenWith' $launcherPath $useExecutable
+    foreach ($target in $menuTargets) {
+        $menuDefinition = if ($target.IsDds) { 'ACTextureConverter.ContextMenu' } else { 'ACTextureConverter.ImageContextMenu' }
+        $registryShellPath = $target.ShellPath.Substring('HKCU:\'.Length)
+        $rootKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("$registryShellPath\ACTextureConverter")
+        $rootKey.SetValue('MUIVerb', 'AC Texture Converter', [Microsoft.Win32.RegistryValueKind]::String)
+        $rootKey.SetValue('ExtendedSubCommandsKey', $menuDefinition, [Microsoft.Win32.RegistryValueKind]::String)
+        $rootKey.Dispose()
+    }
     foreach ($entry in $script:Formats.GetEnumerator()) {
         $formatId = $entry.Value -replace '[^A-Za-z0-9_]', '_'
         $formatName = $entry.Key
         Set-ContextLeaf $overwriteChildren $formatId $formatName "-ShellMode Overwrite -Format $($entry.Value)" $launcherPath $useExecutable
         Set-ContextLeaf $backupChildren $formatId $formatName "-ShellMode Backup -Format $($entry.Value)" $launcherPath $useExecutable
+        Set-ContextLeaf $imageConvertChildren $formatId $formatName "-ShellMode Copy -Format $($entry.Value)" $launcherPath $useExecutable
     }
 }
 Load-FormatSettings
@@ -259,6 +279,67 @@ function Get-A8L8InputSwizzle([string]$InputFile) {
     } finally { $stream.Dispose() }
 }
 
+function Convert-AllZeroAlphaTgaToPng([string]$InputFile, [string]$OutputFile) {
+    # DirectXTex treats some TGA files whose entire alpha plane is zero as opaque.
+    # Decode these explicitly and pass them through PNG, which preserves zero alpha.
+    $bytes = [IO.File]::ReadAllBytes($InputFile)
+    if ($bytes.Length -lt 18 -or $bytes[1] -ne 0 -or $bytes[16] -ne 32 -or ($bytes[17] -band 0x0F) -ne 8 -or $bytes[2] -notin @(2,10)) { return $false }
+    $width = [int][BitConverter]::ToUInt16($bytes, 12)
+    $height = [int][BitConverter]::ToUInt16($bytes, 14)
+    if ($width -le 0 -or $height -le 0) { return $false }
+    $pixelCount = [long]$width * $height
+    $sourcePixels = New-Object byte[] ([long]$pixelCount * 4)
+    $sourceIndex = 18 + [int]$bytes[0]
+    $pixelIndex = 0
+    if ($bytes[2] -eq 2) {
+        $requiredBytes = $sourceIndex + ($pixelCount * 4)
+        if ($requiredBytes -gt $bytes.Length) { return $false }
+        [Array]::Copy($bytes, $sourceIndex, $sourcePixels, 0, $pixelCount * 4)
+    } else {
+        while ($pixelIndex -lt $pixelCount) {
+            if ($sourceIndex -ge $bytes.Length) { return $false }
+            $packet = [int]$bytes[$sourceIndex]
+            $sourceIndex++
+            $count = ($packet -band 0x7F) + 1
+            if (($pixelIndex + $count) -gt $pixelCount) { return $false }
+            if ($packet -band 0x80) {
+                if (($sourceIndex + 4) -gt $bytes.Length) { return $false }
+                for ($n = 0; $n -lt $count; $n++) { [Array]::Copy($bytes, $sourceIndex, $sourcePixels, $pixelIndex * 4, 4); $pixelIndex++ }
+                $sourceIndex += 4
+            } else {
+                $byteCount = $count * 4
+                if (($sourceIndex + $byteCount) -gt $bytes.Length) { return $false }
+                [Array]::Copy($bytes, $sourceIndex, $sourcePixels, $pixelIndex * 4, $byteCount)
+                $sourceIndex += $byteCount
+                $pixelIndex += $count
+            }
+        }
+    }
+    for ($n = 3; $n -lt $sourcePixels.Length; $n += 4) { if ($sourcePixels[$n] -ne 0) { return $false } }
+
+    $topOrigin = ($bytes[17] -band 0x20) -ne 0
+    $rightOrigin = ($bytes[17] -band 0x10) -ne 0
+    $bgra = New-Object byte[] ($pixelCount * 4)
+    for ($sourcePixel = 0; $sourcePixel -lt $pixelCount; $sourcePixel++) {
+        $row = [int][Math]::Floor($sourcePixel / $width)
+        $column = $sourcePixel % $width
+        $x = if ($rightOrigin) { $width - 1 - $column } else { $column }
+        $y = if ($topOrigin) { $row } else { $height - 1 - $row }
+        $targetPixel = ($y * $width) + $x
+        [Array]::Copy($sourcePixels, $sourcePixel * 4, $bgra, $targetPixel * 4, 4)
+    }
+
+    $bitmap = New-Object Drawing.Bitmap($width, $height, [Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    try {
+        $rectangle = New-Object Drawing.Rectangle(0, 0, $width, $height)
+        $bitmapData = $bitmap.LockBits($rectangle, [Drawing.Imaging.ImageLockMode]::WriteOnly, $bitmap.PixelFormat)
+        try { [Runtime.InteropServices.Marshal]::Copy($bgra, 0, $bitmapData.Scan0, $bgra.Length) }
+        finally { $bitmap.UnlockBits($bitmapData) }
+        $bitmap.Save($OutputFile, [Drawing.Imaging.ImageFormat]::Png)
+    } finally { $bitmap.Dispose() }
+    return $true
+}
+
 function Invoke-Conversion([string[]]$Files, [string]$DxgiFormat, [string]$OutDir, [string]$MipSetting, [bool]$OverwriteExisting = $false, [bool]$BackupExisting = $false, [bool]$PerSourceSubfolder = $false) {
     $texconv = Find-Texconv
     if (-not $texconv) { throw 'texconv.exe was not found. Install Microsoft DirectXTex Texconv (see README).' }
@@ -289,12 +370,21 @@ function Invoke-Conversion([string[]]$Files, [string]$DxgiFormat, [string]$OutDi
         $stageDir = Join-Path $outputDirectory ('.DDSForge-tmp-' + [Guid]::NewGuid().ToString('N'))
         [void][IO.Directory]::CreateDirectory($stageDir)
         try {
+            $texconvInputs = @()
+            foreach ($job in $groupJobs) {
+                $inputForTexconv = $job.Input
+                if ([IO.Path]::GetExtension($job.Input) -ieq '.tga') {
+                    $intermediate = Join-Path $stageDir ([IO.Path]::GetFileNameWithoutExtension($job.Input) + '.png')
+                    if (Convert-AllZeroAlphaTgaToPng $job.Input $intermediate) { $inputForTexconv = $intermediate }
+                }
+                $texconvInputs += $inputForTexconv
+            }
             $texconvArgs = @('-nologo', '-f', $texconvFormat, '-m', $mipCount, '-ft', 'dds', '-o', $stageDir)
             if ($DxgiFormat -eq 'A8L8') { $texconvArgs += '-dx9' }
             $swizzle = [string]$groupJobs[0].Swizzle
             if ($swizzle) { $texconvArgs += '--swizzle'; $texconvArgs += $swizzle }
             $texconvArgs += '-y'
-            $texconvArgs += @($groupJobs | ForEach-Object { $_.Input })
+            $texconvArgs += $texconvInputs
             $psi = New-Object Diagnostics.ProcessStartInfo
             $psi.FileName = $texconv
             $psi.Arguments = (($texconvArgs | ForEach-Object { Quote-Argument ([string]$_) }) -join ' ')
@@ -417,7 +507,7 @@ $title.Text = 'AC Texture Converter'
     }
     $fileDrop = {
         param($sender, $e)
-        $supportedExtensions = @('.dds','.png','.tga','.bmp','.jpg','.jpeg','.tif','.tiff','.hdr')
+        $supportedExtensions = $script:SupportedInputExtensions
         $added = 0
         foreach ($file in [string[]]$e.Data.GetData([Windows.Forms.DataFormats]::FileDrop)) {
             if ((Test-Path -LiteralPath $file -PathType Leaf) -and ([IO.Path]::GetExtension($file).ToLowerInvariant() -in $supportedExtensions) -and -not $list.Items.Contains($file)) {
@@ -542,6 +632,12 @@ if ($SelfTest) {
     & $assert ((Resolve-A8L8InputSwizzle '' 0 0x20001 16 0xFF 0xFF00) -eq 'rg') 'legacy A8L8 sources preserve their second channel'
     & $assert ((Resolve-A8L8InputSwizzle 'DX10' 49 0 0 0 0) -eq 'rg') 'DXGI R8G8 sources preserve their second channel'
     & $assert (-not [string]::IsNullOrWhiteSpace((Get-DdsProgId))) '.dds shell ProgID is resolved'
+    & $assert (@('.dds','.png','.tga','.bmp','.jpg','.jpeg','.tif','.tiff','.hdr' | Where-Object { $_ -notin $script:SupportedInputExtensions }).Count -eq 0) 'Explorer input types match the supported image formats'
+    & $assert ((Get-ContextMenuShellPaths) -contains 'HKCU:\Software\Classes\SystemFileAssociations\.png\shell') 'context menu covers supported image extensions'
+    $pngMenuTarget = @(Get-ContextMenuTargets | Where-Object { $_.ShellPath -eq 'HKCU:\Software\Classes\SystemFileAssociations\.png\shell' })
+    & $assert ($pngMenuTarget.Count -eq 1 -and -not $pngMenuTarget[0].IsDds) 'image inputs receive the image-safe context menu'
+    $ddsMenuTarget = @(Get-ContextMenuTargets | Where-Object { $_.ShellPath -eq 'HKCU:\Software\Classes\SystemFileAssociations\.dds\shell' })
+    & $assert ($ddsMenuTarget.Count -eq 1 -and $ddsMenuTarget[0].IsDds) 'DDS inputs retain DDS overwrite actions'
     & $assert ((Resolve-MipCount 'full') -eq '0') 'full mip chain mapping'
     & $assert ((Resolve-MipCount 'none') -eq '1') 'no mipmaps mapping'
     & $assert ((Resolve-MipCount '8') -eq '8') 'fixed mip count mapping'
@@ -569,9 +665,12 @@ if ($RegisterContextMenu) {
 
 if ($ShellMode) {
     try {
-        if (-not $InputPath.Count) { throw 'No DDS files were passed from Explorer.' }
+        if (-not $InputPath.Count) { throw 'No supported image files were passed from Explorer.' }
         foreach ($path in $InputPath) {
-            if ([IO.Path]::GetExtension($path) -ine '.dds') { throw "The context menu only supports DDS files: $path" }
+            if ([IO.Path]::GetExtension($path).ToLowerInvariant() -notin $script:SupportedInputExtensions) { throw "The context menu does not support this file type: $path" }
+        }
+        if ($ShellMode -in @('Overwrite','Backup') -and @($InputPath | Where-Object { [IO.Path]::GetExtension($_).ToLowerInvariant() -ne '.dds' }).Count) {
+            throw 'Overwrite and backup menu actions are available for DDS files. Image files can be converted to the DDS-Converted subfolder.'
         }
         $backupMode = $ShellMode -eq 'Backup'
         $overwriteMode = $ShellMode -in @('Overwrite','Backup')
