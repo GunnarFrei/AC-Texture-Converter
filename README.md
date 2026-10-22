@@ -16,6 +16,8 @@ Run `Build-Portable.ps1` to create an `AC Texture Converter Portable` folder. It
 
 ## Share with other users
 
+The ready-to-download Windows package is [AC-Texture-Converter-Windows-with-icon.zip](AC-Texture-Converter-Windows-with-icon.zip). Download and extract it, then run `Install-ACTextureConverter.bat`.
+
 Run `Build-Distribution.ps1` to create `AC-Texture-Converter-Windows.zip`. It contains only the app, portable runtime files, installation/repair/removal scripts, and third-party notices; it excludes the local `DDS-Converted` folder. Recipients extract the archive and run `Install-ACTextureConverter.bat`. Texconv is bundled; the installer can use `winget` to install its Microsoft Visual C++ runtime dependency when needed. The portable app requires that runtime to be present on Windows.
 
 To update an existing installation and repair the Explorer menu, run `Repair-ACTextureConverter.bat` from this folder. It backs up the installed app files before updating them and re-registering the menu. When the portable executable is present, the Explorer menu launches it directly. For a clean reinstall, run `Uninstall-ACTextureConverter.bat`, then `Install-ACTextureConverter.bat`.
@@ -52,3 +54,4 @@ Run the self-tests with `powershell -ExecutionPolicy Bypass -File .\Test-ACTextu
 ## Limitations
 
 This project folder does not contain PhotoCraft source code. AC Texture Converter is a standalone utility and does not modify PhotoCraft. The context-menu entry is registered for `.dds` files; other supported image formats can be added in the app.
+
