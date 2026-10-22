@@ -1,4 +1,4 @@
-﻿param(
+param(
     [string[]]$InputPath = @(),
     [string]$Format = 'BC7_UNORM',
     [string]$OutputDirectory = '',
@@ -226,7 +226,7 @@ function Resolve-OutputDirectory([string]$InputFile, [string]$ConfiguredDirector
 
 function Get-OutputDdsPath([string]$InputFile, [string]$OutputDirectory) {
     $extension = [IO.Path]::GetExtension($InputFile)
-    if ($extension -ine '.dds') { $extension = '.DDS' }
+    if ($extension -ine '.dds') { $extension = '.dds' }
     return Join-Path $OutputDirectory (([IO.Path]::GetFileNameWithoutExtension($InputFile)) + $extension)
 }
 
@@ -556,7 +556,7 @@ if ($SelfTest) {
     & $assert ((Get-OutputDdsPath 'C:\Users\test\Desktop\source.dds' 'C:\Users\test\out') -ceq 'C:\Users\test\out\source.dds') 'lowercase DDS extension is preserved'
     & $assert ((Get-OutputDdsPath 'C:\Users\test\Desktop\source.DDS' 'C:\Users\test\out') -ceq 'C:\Users\test\out\source.DDS') 'uppercase DDS extension is preserved'
     & $assert ((Get-OutputDdsPath 'C:\Users\test\Desktop\source.DdS' 'C:\Users\test\out') -ceq 'C:\Users\test\out\source.DdS') 'mixed-case DDS extension is preserved'
-    & $assert ((Get-OutputDdsPath 'C:\Users\test\Desktop\source.png' 'C:\Users\test\out') -ceq 'C:\Users\test\out\source.DDS') 'non-DDS inputs still produce DDS files'
+    & $assert ((Get-OutputDdsPath 'C:\Users\test\Desktop\source.png' 'C:\Users\test\out') -ceq 'C:\Users\test\out\source.dds') 'non-DDS inputs produce lowercase DDS extension'
     & $assert ($script:Formats.Count -gt 0) 'Explorer format choices follow the enabled output formats'
     Write-Output 'AC Texture Converter self-tests: OK'
     return
@@ -603,3 +603,4 @@ if ($InputPath.Count -gt 0 -and -not $OpenWith) {
     catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
 }
 Show-MainWindow $InputPath
+

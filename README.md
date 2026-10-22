@@ -1,4 +1,4 @@
-# AC Texture Converter v0.9
+# AC Texture Converter v0.9.1
 
 A Windows tool for converting DDS textures and common image files for Assetto Corsa modding workflows.
 
@@ -16,7 +16,7 @@ BC7 DDS support is documented for Custom Shaders Patch (CSP) from version 0.1.74
 
 ## Install
 
-1. Download [AC-Texture-Converter-Windows-with-icon.zip](AC-Texture-Converter-Windows-with-icon.zip) and extract it.
+1. Download [AC-Texture-Converter-Windows-with-icon.zip](https://github.com/GunnarFrei/AC-Texture-Converter/releases/download/v0.9.1/AC-Texture-Converter-Windows-with-icon.zip) and extract it.
 2. Run `Install-ACTextureConverter.bat` and follow the prompts. The installer sets up the app and its per-user DDS Explorer context menu.
 3. Right-click a DDS file to open the AC Texture Converter menu. On Windows 11, it may be under **Show more options**. You can also start the app with `Open-ACTextureConverter.bat`.
 

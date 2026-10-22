@@ -76,7 +76,7 @@ try {
     Copy-Item -LiteralPath $builtExe -Destination $targetExe -Force
 
     $readme = @'
-AC Texture Converter v0.9 - Portable build
+AC Texture Converter v0.9.1 - Portable build
 
 Run "AC Texture Converter.exe" to open the app. Drop DDS or supported image files onto the window, or use Add files.
 
@@ -97,3 +97,4 @@ catch {
 finally {
     if (Test-Path -LiteralPath $buildRoot) { Remove-Item -LiteralPath $buildRoot -Recurse -Force }
 }
+
