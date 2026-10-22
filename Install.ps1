@@ -28,6 +28,9 @@ try {
     }
 
     $sourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+    foreach ($licenseFile in @('LICENSE','ThirdPartyNotices.txt')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot $licenseFile) -PathType Leaf)) { throw "Required license file is missing: $licenseFile" }
+    }
     $portableRoot = Join-Path $sourceRoot 'AC Texture Converter Portable'
     $portableExe = Join-Path $sourceRoot 'AC Texture Converter Portable\AC Texture Converter.exe'
     $localTexconv = Join-Path $sourceRoot 'texconv.exe'
@@ -79,6 +82,8 @@ try {
         Copy-Item -LiteralPath $portableExe -Destination (Join-Path $installRoot 'AC Texture Converter.exe')
     }
     if ($texconvToBundle) { Copy-Item -LiteralPath $texconvToBundle -Destination (Join-Path $installRoot 'texconv.exe') }
+    Copy-Item -LiteralPath (Join-Path $sourceRoot 'LICENSE') -Destination $installRoot
+    Copy-Item -LiteralPath (Join-Path $sourceRoot 'ThirdPartyNotices.txt') -Destination $installRoot
 
     $createdKey = $true
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $installRoot 'ACTextureConverter.ps1') -RegisterContextMenu

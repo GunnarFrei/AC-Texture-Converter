@@ -22,7 +22,6 @@ To remove the app, run `Uninstall-ACTextureConverter.bat`.
 
 ## Licenses
 
-The bundled Microsoft DirectXTex `texconv.exe` is licensed under the MIT License. Its full notice is in [ThirdPartyNotices.txt](ThirdPartyNotices.txt).
+AC Texture Converter is licensed under the MIT License. See [LICENSE](LICENSE).
 
-The AC Texture Converter project does not currently include a separate license for its own source code.
-
+The bundled Microsoft DirectXTex `texconv.exe` is also licensed under MIT. Its full notice is in [ThirdPartyNotices.txt](ThirdPartyNotices.txt).

@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $roots = @(
-    @{ Path = (Join-Path $env:LOCALAPPDATA 'ACTextureConverter'); Expected = @('ACTextureConverter.ps1','Open-ACTextureConverter.bat','AC Texture Converter.exe','texconv.exe') },
+    @{ Path = (Join-Path $env:LOCALAPPDATA 'ACTextureConverter'); Expected = @('ACTextureConverter.ps1','Open-ACTextureConverter.bat','AC Texture Converter.exe','texconv.exe','LICENSE','ThirdPartyNotices.txt') },
     @{ Path = (Join-Path $env:LOCALAPPDATA 'DDSForge'); Expected = @('DdsForge.ps1','Open-DDSForge.bat','texconv.exe') }
 )
 foreach ($entry in $roots) {

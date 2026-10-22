@@ -17,13 +17,13 @@ if (Test-Path -LiteralPath $archivePath) { throw "Archive already exists; nothin
 $required = @(
     'Install-ACTextureConverter.bat','Install.ps1','ACTextureConverter.ps1',
     'Open-ACTextureConverter.bat','Repair-ACTextureConverter.bat','Repair-ACTextureConverter.ps1',
-    'Uninstall-ACTextureConverter.bat','Uninstall-ACTextureConverter.ps1','README.md','ThirdPartyNotices.txt'
+    'Uninstall-ACTextureConverter.bat','Uninstall-ACTextureConverter.ps1','README.md','LICENSE','ThirdPartyNotices.txt'
 )
 foreach ($name in $required) {
     $path = Join-Path $sourceRoot $name
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required distribution file is missing: $path" }
 }
-foreach ($name in @('AC Texture Converter.exe','ACTextureConverter.ps1','README.txt','texconv.exe','ACTextureConverter.ico')) {
+foreach ($name in @('AC Texture Converter.exe','ACTextureConverter.ps1','README.txt','texconv.exe','ACTextureConverter.ico','LICENSE','ThirdPartyNotices.txt')) {
     $path = Join-Path $portableRoot $name
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Portable package file is missing: $path" }
 }

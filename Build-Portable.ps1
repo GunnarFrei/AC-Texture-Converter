@@ -6,6 +6,8 @@ $launcherSource = Join-Path $sourceRoot 'Launcher\ACTextureConverterLauncher.cs'
 $iconBuilder = Join-Path $sourceRoot 'Create-AppIcon.ps1'
 $iconPath = Join-Path $sourceRoot 'Assets\ACTextureConverter.ico'
 $appScript = Join-Path $sourceRoot 'ACTextureConverter.ps1'
+$projectLicense = Join-Path $sourceRoot 'LICENSE'
+$thirdPartyNotices = Join-Path $sourceRoot 'ThirdPartyNotices.txt'
 $targetScript = Join-Path $packageRoot 'ACTextureConverter.ps1'
 $targetExe = Join-Path $packageRoot 'AC Texture Converter.exe'
 $targetTexconv = Join-Path $packageRoot 'texconv.exe'
@@ -14,6 +16,9 @@ if ((Test-Path -LiteralPath $packageRoot) -and -not $Rebuild) {
     throw "The output folder already exists; nothing was changed: $packageRoot"
 }
 if (-not (Test-Path -LiteralPath $appScript -PathType Leaf)) { throw "App script not found: $appScript" }
+foreach ($licenseFile in @($projectLicense,$thirdPartyNotices)) {
+    if (-not (Test-Path -LiteralPath $licenseFile -PathType Leaf)) { throw "License notice not found: $licenseFile" }
+}
 if (-not (Test-Path -LiteralPath $launcherSource -PathType Leaf)) { throw "Launcher source not found: $launcherSource" }
 if ($Rebuild) {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $iconBuilder -Force
@@ -52,7 +57,7 @@ try {
     }
 
     if (Test-Path -LiteralPath $packageRoot) {
-        $allowed = @('AC Texture Converter.exe','ACTextureConverter.ps1','README.txt','texconv.exe','ACTextureConverter.ico')
+        $allowed = @('AC Texture Converter.exe','ACTextureConverter.ps1','README.txt','texconv.exe','ACTextureConverter.ico','LICENSE','ThirdPartyNotices.txt')
         $unexpected = @(Get-ChildItem -LiteralPath $packageRoot -Force | Where-Object { $_.Name -notin $allowed })
         if ($unexpected.Count) { throw "The output folder contains additional items and was left untouched: $packageRoot" }
         $backupRoot = Join-Path $sourceRoot ('BuildBackups\Portable-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
@@ -66,14 +71,18 @@ try {
     Copy-Item -LiteralPath $appScript -Destination $targetScript -Force
     Copy-Item -LiteralPath $texconvPath -Destination $targetTexconv -Force
     Copy-Item -LiteralPath $iconPath -Destination (Join-Path $packageRoot 'ACTextureConverter.ico') -Force
+    Copy-Item -LiteralPath $projectLicense -Destination (Join-Path $packageRoot 'LICENSE') -Force
+    Copy-Item -LiteralPath $thirdPartyNotices -Destination (Join-Path $packageRoot 'ThirdPartyNotices.txt') -Force
     Copy-Item -LiteralPath $builtExe -Destination $targetExe -Force
 
     $readme = @'
-AC Texture Converter — Portable build
+AC Texture Converter v0.9 - Portable build
 
 Run "AC Texture Converter.exe" to open the app. Drop DDS or supported image files onto the window, or use Add files.
 
-This folder must stay together: the executable starts ACTextureConverter.ps1, and texconv.exe performs the texture conversion. Windows PowerShell 5.1 and the Microsoft Visual C++ 2015–2022 x64 runtime are required. Texconv is from Microsoft's DirectXTex project and is licensed under MIT.
+Keep this folder together: the executable starts ACTextureConverter.ps1, and texconv.exe performs the texture conversion. Windows PowerShell 5.1 and the Microsoft Visual C++ 2015-2022 x64 runtime are required.
+
+AC Texture Converter is licensed under MIT; see LICENSE. Texconv is also MIT-licensed; see ThirdPartyNotices.txt.
 
 The portable copy does not install an Explorer menu entry. To use the existing Explorer integration, run the project's Install-ACTextureConverter.bat. That installation remains separate from this portable folder.
 '@
