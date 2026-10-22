@@ -1,4 +1,4 @@
-# AC Texture Converter
+# AC Texture Converter v0.9
 
 A Windows tool for converting DDS textures and common image files for Assetto Corsa modding workflows.
 
