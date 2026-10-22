@@ -1,0 +1,18 @@
+# Local test conversions and generated distributions
+/DDS-Converted/
+/AC Texture Converter Portable/
+/AC Texture Converter Distribution/
+/AC Texture Converter Distribution with Icon/
+/AC-Texture-Converter-Windows*.zip
+/BuildBackups/
+/texconv.exe
+
+# Preserved icon iterations and generated build backups
+/Assets/ACTextureConverter-v1.png
+/Assets/ACTextureConverter-blue.png
+/Assets/ACTextureConverter-*.ico
+
+# User-specific settings and temporary build output
+*.user
+*.log
+*.tmp
