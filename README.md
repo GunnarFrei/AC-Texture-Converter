@@ -2,7 +2,7 @@
 
 A Windows tool for converting DDS textures and common image files for Assetto Corsa modding workflows.
 
-![AC Texture Converter v0.9.3 showing the file list, format details, and compatibility information](Assets/ACTextureConverter-v0.9.3.png)
+![AC Texture Converter v0.9.3 showing the file list, format details, and compatibility information](Assets/ACTextureConverter-README.png)
 
 ## Features and formats
 
@@ -30,3 +30,4 @@ To remove the app, run `Uninstall-ACTextureConverter.bat`.
 AC Texture Converter is licensed under the MIT License. See [LICENSE](LICENSE).
 
 The bundled Microsoft DirectXTex `texconv.exe` is also licensed under MIT. Its full notice is in [ThirdPartyNotices.txt](ThirdPartyNotices.txt).
+
