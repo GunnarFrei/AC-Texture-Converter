@@ -1,4 +1,4 @@
-param([switch]$NoPause)
+﻿param([switch]$NoPause)
 $ErrorActionPreference = 'Stop'
 $installRoot = Join-Path $env:LOCALAPPDATA 'ACTextureConverter'
 $supportedInputExtensions = @('.dds','.png','.tga','.bmp','.jpg','.jpeg','.tif','.tiff','.hdr')
@@ -90,7 +90,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Could not register the Explorer context menu (exit code $LASTEXITCODE)." }
 
     Write-Host "AC Texture Converter installed: $installRoot" -ForegroundColor Green
-    Write-Host 'The entry appears in the Explorer context menu for DDS, PNG, TGA, BMP, JPEG, TIFF, and HDR files (on Windows 11, it may be under “Show more options”).'
+    Write-Host 'The entry appears in the Explorer context menu for DDS, PNG, TGA, BMP, JPEG, TIFF, and HDR files (on Windows 11, it may be under Show more options).'
     if (-not $NoPause) { Write-Host 'Press any key to close this window.'; try { [void][Console]::ReadKey($true) } catch { } }
 } catch {
     Write-Host ''
@@ -106,4 +106,3 @@ try {
     if (-not $NoPause) { Write-Host 'Press any key to close this window.'; try { [void][Console]::ReadKey($true) } catch { } }
     exit 1
 }
-

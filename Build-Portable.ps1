@@ -53,8 +53,8 @@ try {
     $builtShellExtension = Join-Path $buildRoot 'ACTextureConverterShellExtension.dll'
     $compileArgs = @(
         '/nologo', '/target:winexe', '/platform:x64', '/optimize+',
-        "/out:`"$builtExe`"", "/win32icon:`"$iconPath`"", "/reference:System.Windows.Forms.dll", "/reference:System.dll",
-        "`"$launcherSource`""
+        "/out:$builtExe", "/win32icon:$iconPath", "/reference:System.Windows.Forms.dll", "/reference:System.dll",
+        $launcherSource
     )
     & $compiler @compileArgs
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $builtExe -PathType Leaf)) {
@@ -62,8 +62,8 @@ try {
     }
     $shellCompileArgs = @(
         '/nologo', '/target:library', '/platform:x64', '/optimize+',
-        "/out:`"$builtShellExtension`"", '/reference:System.dll', '/reference:System.Web.Extensions.dll',
-        "`"$shellExtensionSource`""
+        "/out:$builtShellExtension", '/reference:System.dll', '/reference:System.Web.Extensions.dll',
+        $shellExtensionSource
     )
     & $compiler @shellCompileArgs
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $builtShellExtension -PathType Leaf)) {
@@ -83,7 +83,9 @@ try {
     }
 
     Copy-Item -LiteralPath $appScript -Destination $targetScript -Force
-    Copy-Item -LiteralPath $texconvPath -Destination $targetTexconv -Force
+    if ([IO.Path]::GetFullPath($texconvPath) -ne [IO.Path]::GetFullPath($targetTexconv)) {
+        Copy-Item -LiteralPath $texconvPath -Destination $targetTexconv -Force
+    }
     Copy-Item -LiteralPath $iconPath -Destination (Join-Path $packageRoot 'ACTextureConverter.ico') -Force
     Copy-Item -LiteralPath $projectLicense -Destination (Join-Path $packageRoot 'LICENSE') -Force
     Copy-Item -LiteralPath $thirdPartyNotices -Destination (Join-Path $packageRoot 'ThirdPartyNotices.txt') -Force
@@ -91,7 +93,7 @@ try {
     Copy-Item -LiteralPath $builtShellExtension -Destination $targetShellExtension -Force
 
     $readme = @'
-AC Texture Converter v0.9.2 - Portable build
+AC Texture Converter v0.9.3 - Portable build
 
 Run "AC Texture Converter.exe" to open the app. Drop DDS or supported image files onto the window, or use Add files.
 
@@ -112,4 +114,3 @@ catch {
 finally {
     if (Test-Path -LiteralPath $buildRoot) { Remove-Item -LiteralPath $buildRoot -Recurse -Force }
 }
-

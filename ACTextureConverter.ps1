@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string[]]$InputPath = @(),
     [string]$Format = 'BC7_UNORM',
     [string]$OutputDirectory = '',
@@ -16,6 +16,47 @@ param(
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+
+class ACTextureListComparer : System.Collections.IComparer {
+    [int]$Column
+    [bool]$Ascending
+    ACTextureListComparer([int]$column, [bool]$ascending) { $this.Column = $column; $this.Ascending = $ascending }
+    [int] Compare([object]$x, [object]$y) {
+        $left = [string]$x.SubItems[$this.Column].Text
+        $right = [string]$y.SubItems[$this.Column].Text
+        if ($this.Column -eq 2 -and $left -match '^(\d+)\s*[×x]\s*(\d+)$') {
+            $leftWidth = [long]$Matches[1]; $leftHeight = [long]$Matches[2]
+            if ($right -match '^(\d+)\s*[×x]\s*(\d+)$') {
+                $rightWidth = [long]$Matches[1]; $rightHeight = [long]$Matches[2]
+            $leftArea = $leftWidth * $leftHeight
+            $rightArea = $rightWidth * $rightHeight
+            if ($leftArea -lt $rightArea) { $result = -1 } elseif ($leftArea -gt $rightArea) { $result = 1 }
+            elseif ($leftWidth -lt $rightWidth) { $result = -1 } elseif ($leftWidth -gt $rightWidth) { $result = 1 }
+            elseif ($leftHeight -lt $rightHeight) { $result = -1 } elseif ($leftHeight -gt $rightHeight) { $result = 1 }
+            else { $result = 0 }
+            if ($this.Ascending) { return $result }
+            return -$result
+            }
+        }
+        if ($this.Column -eq 3) {
+            $leftSize = [long]$x.SubItems[3].Tag
+            $rightSize = [long]$y.SubItems[3].Tag
+            if ($leftSize -lt $rightSize) { $result = -1 } elseif ($leftSize -gt $rightSize) { $result = 1 } else { $result = 0 }
+            if ($this.Ascending) { return $result }
+            return -$result
+        }
+        if ($this.Column -eq 4) {
+            $leftDate = [long]$x.SubItems[4].Tag
+            $rightDate = [long]$y.SubItems[4].Tag
+            if ($leftDate -lt $rightDate) { $result = -1 } elseif ($leftDate -gt $rightDate) { $result = 1 } else { $result = 0 }
+            if ($this.Ascending) { return $result }
+            return -$result
+        }
+        $result = [string]::Compare($left, $right, [StringComparison]::CurrentCultureIgnoreCase)
+        if ($this.Ascending) { return $result }
+        return -$result
+    }
+}
 
 if (-not [string]::IsNullOrWhiteSpace($InputListFile)) {
     $listPath = [IO.Path]::GetFullPath($InputListFile)
@@ -49,8 +90,8 @@ $script:FormatHints = @{
     'BC4_UNORM' = 'Single-channel grayscale or data masks; not a color texture format.'
     'BC5_UNORM' = 'Two-channel data, commonly XY normal maps. Use only when the material shader expects this layout.'
     'BC6H_UF16' = 'HDR RGB without alpha; for HDR environment or lighting textures, not typical car textures.'
-    'BC7_UNORM' = "High-quality RGB/RGBA with preserved alpha.`r`nDocumented CSP support: 0.1.74-preview3 (build 1434) or newer; verify your target setup."
-    'BC7_OPAQUE' = "High-quality opaque BC7; alpha is forced to 1 before compression.`r`nDocumented CSP support: 0.1.74-preview3 (build 1434) or newer; verify your target setup."
+    'BC7_UNORM' = "High-quality lossy RGB/RGBA compression. It can retain alpha and usually handles smooth gradients and alpha detail better than BC1/BC3, but is not pixel-exact.`r`nRequires CSP 0.1.74-preview3 (build 1434) or newer."
+    'BC7_OPAQUE' = "High-quality lossy opaque BC7; source alpha is removed before compression. Usually handles smooth color gradients better than BC1/BC3, but is not pixel-exact.`r`nRequires CSP 0.1.74-preview3 (build 1434) or newer."
     'R8G8B8A8_UNORM' = 'Uncompressed 32-bit RGBA; avoids block artifacts but creates larger files.'
     'A8L8' = 'Legacy grayscale plus alpha: luminance comes from R; an existing A8L8/R8G8 source keeps its second channel as alpha. Use where the AC material expects AL 8.8.'
 }
@@ -272,6 +313,217 @@ function Resolve-A8L8InputSwizzle([string]$FourCC, [uint32]$DxgiFormat, [uint32]
     return 'ra'
 }
 
+$script:DdsFormatCache = @{}
+function Get-InputFormatInfo([string]$InputFile) {
+    $extension = [IO.Path]::GetExtension($InputFile).TrimStart('.').ToUpperInvariant()
+    if ($extension -ne 'DDS') { return [pscustomobject]@{ Label = $extension; Detail = "$extension image" } }
+    try {
+        $fileInfo = Get-Item -LiteralPath $InputFile -ErrorAction Stop
+        $cacheKey = "$InputFile|$($fileInfo.Length)|$($fileInfo.LastWriteTimeUtc.Ticks)"
+        if ($script:DdsFormatCache.ContainsKey($cacheKey)) { return $script:DdsFormatCache[$cacheKey] }
+        $stream = [IO.File]::Open($InputFile, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+        try {
+            if ($stream.Length -lt 128) { throw 'DDS header is incomplete.' }
+            $header = New-Object byte[] 148
+            $read = $stream.Read($header, 0, $header.Length)
+        } finally { $stream.Dispose() }
+        if ([Text.Encoding]::ASCII.GetString($header, 0, 4) -ne 'DDS ') { throw 'DDS magic is missing.' }
+        $fourCC = [Text.Encoding]::ASCII.GetString($header, 84, 4)
+        $pixelFlags = [BitConverter]::ToUInt32($header, 80)
+        $bits = [BitConverter]::ToUInt32($header, 88)
+        $red = [BitConverter]::ToUInt32($header, 92)
+        $green = [BitConverter]::ToUInt32($header, 96)
+        $blue = [BitConverter]::ToUInt32($header, 100)
+        $alpha = [BitConverter]::ToUInt32($header, 104)
+        $label = $null
+        $detail = $null
+        if ($fourCC -eq 'DX10') {
+            if ($read -lt 148) { throw 'DDS DX10 header is incomplete.' }
+            $dxgi = [BitConverter]::ToUInt32($header, 128)
+            $dxgiNames = @{
+                10='R16G16B16A16_FLOAT'; 11='R16G16B16A16_UNORM'; 24='R10G10B10A2_UNORM';
+                28='R8G8B8A8_UNORM'; 29='R8G8B8A8_UNORM_SRGB'; 49='R8G8_UNORM'; 61='R8_UNORM';
+                71='BC1_UNORM'; 72='BC1_UNORM_SRGB'; 74='BC2_UNORM'; 75='BC2_UNORM_SRGB';
+                77='BC3_UNORM'; 78='BC3_UNORM_SRGB'; 80='BC4_UNORM'; 81='BC4_SNORM';
+                83='BC5_UNORM'; 84='BC5_SNORM'; 87='B8G8R8A8_UNORM'; 88='B8G8R8X8_UNORM';
+                95='BC6H_UF16'; 96='BC6H_SF16'; 98='BC7_UNORM'; 99='BC7_UNORM_SRGB'
+            }
+            $detail = if ($dxgiNames.ContainsKey([int]$dxgi)) { $dxgiNames[[int]$dxgi] } else { "DXGI format $dxgi" }
+            $label = switch ($dxgi) {
+                { $_ -in 71,72 } { 'BC1'; break } { $_ -in 74,75 } { 'BC2'; break }
+                { $_ -in 77,78 } { 'BC3'; break } 80 { 'BC4'; break } 81 { 'BC4 SNORM'; break }
+                83 { 'BC5'; break } 84 { 'BC5 SNORM'; break } { $_ -in 95,96 } { 'BC6H'; break }
+                { $_ -in 98,99 } { 'BC7'; break } 49 { 'R8G8'; break } 61 { 'R8'; break }
+                { $_ -in 28,29 } { 'A8B8G8R8'; break } 87 { 'A8R8G8B8'; break } 88 { 'X8R8G8B8'; break }
+                default { $detail }
+            }
+            if ($dxgi -in 72,75,78,29,99) { $detail += ' (sRGB)' }
+        } elseif (($pixelFlags -band 0x4) -ne 0) {
+            $legacy = @{
+                'DXT1'=@('BC1','BC1 / DXT1'); 'DXT2'=@('BC2','BC2 / DXT2 (premultiplied alpha)');
+                'DXT3'=@('BC2','BC2 / DXT3'); 'DXT4'=@('BC3','BC3 / DXT4 (premultiplied alpha)');
+                'DXT5'=@('BC3','BC3 / DXT5'); 'ATI1'=@('BC4','BC4 / ATI1'); 'BC4U'=@('BC4','BC4 UNORM');
+                'BC4S'=@('BC4 SNORM','BC4 SNORM'); 'ATI2'=@('BC5','BC5 / ATI2'); 'BC5U'=@('BC5','BC5 UNORM');
+                'BC5S'=@('BC5 SNORM','BC5 SNORM'); 'BC6H'=@('BC6H','BC6H'); 'BC7 '=@('BC7','BC7');
+                'A8L8'=@('A8L8','A8L8 (8-bit luminance + 8-bit alpha)')
+            }
+            if ($legacy.ContainsKey($fourCC)) { $label = $legacy[$fourCC][0]; $detail = $legacy[$fourCC][1] }
+            else { $label = $fourCC.Trim(); $detail = "DDS FourCC $($fourCC.Trim())" }
+        } elseif ($bits -eq 16 -and $red -eq 0xFF -and $alpha -eq 0xFF00) {
+            $label = 'A8L8'; $detail = 'A8L8 (8-bit luminance + 8-bit alpha)'
+        } elseif ($bits -eq 32 -and $red -eq 0xFF -and $green -eq 0xFF00 -and $blue -eq 0xFF0000 -and $alpha -eq 0xFF000000) {
+            $label = 'A8B8G8R8'; $detail = 'Uncompressed 32-bit 8.8.8.8; R8G8B8A8 byte order'
+        } elseif ($bits -eq 32 -and $red -eq 0xFF0000 -and $green -eq 0xFF00 -and $blue -eq 0xFF -and $alpha -eq 0xFF000000) {
+            $label = 'A8R8G8B8'; $detail = 'Uncompressed 32-bit 8.8.8.8; B8G8R8A8 byte order'
+        } elseif ($bits -eq 24) {
+            $label = 'R8G8B8'; $detail = 'Uncompressed 24-bit RGB'
+        } elseif ($bits -eq 32 -and $alpha -ne 0) {
+            $label = 'A8R8G8B8'; $detail = 'Uncompressed 32-bit 8.8.8.8 (channel masks not recognized)'
+        } elseif (($pixelFlags -band 0x20000) -ne 0) {
+            $label = "L$bits"; $detail = "Uncompressed $bits-bit luminance"
+        } elseif (($pixelFlags -band 0x2) -ne 0) {
+            $label = "A$bits"; $detail = "Uncompressed $bits-bit alpha"
+        } else {
+            $label = "RGB$bits"; $detail = "Uncompressed $bits-bit RGB"
+        }
+        $result = [pscustomobject]@{ Label = $label; Detail = $detail }
+        $script:DdsFormatCache[$cacheKey] = $result
+        return $result
+    } catch {
+        return [pscustomobject]@{ Label = 'DDS?'; Detail = "Could not read DDS format: $($_.Exception.Message)" }
+    }
+}
+
+$script:ResolutionCache = @{}
+function Get-InputResolutionInfo([string]$InputFile) {
+    try {
+        $fileInfo = Get-Item -LiteralPath $InputFile -ErrorAction Stop
+        $cacheKey = "$InputFile|$($fileInfo.Length)|$($fileInfo.LastWriteTimeUtc.Ticks)"
+        if ($script:ResolutionCache.ContainsKey($cacheKey)) { return $script:ResolutionCache[$cacheKey] }
+        $extension = [IO.Path]::GetExtension($InputFile).ToLowerInvariant()
+        $width = 0; $height = 0
+        if ($extension -eq '.dds') {
+            $stream = [IO.File]::Open($InputFile, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+            try {
+                if ($stream.Length -lt 128) { throw 'DDS header is incomplete.' }
+                $header = New-Object byte[] 128
+                [void]$stream.Read($header, 0, $header.Length)
+            } finally { $stream.Dispose() }
+            if ([Text.Encoding]::ASCII.GetString($header, 0, 4) -ne 'DDS ') { throw 'DDS magic is missing.' }
+            $height = [int][BitConverter]::ToUInt32($header, 12)
+            $width = [int][BitConverter]::ToUInt32($header, 16)
+        } elseif ($extension -eq '.tga') {
+            $header = New-Object byte[] 18
+            $stream = [IO.File]::Open($InputFile, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+            try { if ($stream.Read($header, 0, $header.Length) -lt 18) { throw 'TGA header is incomplete.' } } finally { $stream.Dispose() }
+            $width = [int][BitConverter]::ToUInt16($header, 12)
+            $height = [int][BitConverter]::ToUInt16($header, 14)
+        } elseif ($extension -eq '.hdr') {
+            $reader = New-Object IO.StreamReader($InputFile, [Text.Encoding]::ASCII, $true, 4096, $false)
+            try {
+                for ($lineIndex = 0; $lineIndex -lt 80; $lineIndex++) {
+                    $line = $reader.ReadLine()
+                    if ($null -eq $line) { break }
+                    if ($line -match '^\s*[+-]Y\s+(\d+)\s+[+-]X\s+(\d+)\s*$') { $height = [int]$Matches[1]; $width = [int]$Matches[2]; break }
+                }
+            } finally { $reader.Dispose() }
+        } else {
+            $image = [Drawing.Image]::FromFile($InputFile)
+            try { $width = [int]$image.Width; $height = [int]$image.Height } finally { $image.Dispose() }
+        }
+        if ($width -le 0 -or $height -le 0) { throw 'Image dimensions could not be read.' }
+        $aligned = (($width % 4) -eq 0 -and ($height % 4) -eq 0)
+        $note = if ($aligned) { 'Both dimensions align to 4×4 blocks.' } else { 'Not aligned to 4×4 BC compression blocks; check compatibility with your target pipeline.' }
+        $result = [pscustomobject]@{ Text = "$width × $height"; Width = $width; Height = $height; Known = $true; IsBlockAligned = $aligned; Detail = $note }
+        $script:ResolutionCache[$cacheKey] = $result
+        return $result
+    } catch {
+        return [pscustomobject]@{ Text = 'Unknown'; Width = 0; Height = 0; Known = $false; IsBlockAligned = $false; Detail = "Could not read image dimensions: $($_.Exception.Message)" }
+    }
+}
+
+function Get-AssettoCorsaInputStatus([string]$InputFile, $FormatInfo) {
+    $extension = [IO.Path]::GetExtension($InputFile).ToLowerInvariant()
+    if ($extension -eq '.dds') {
+        switch -Regex ($FormatInfo.Label) {
+            '^(BC1|BC2|BC3|A8L8|A8R8G8B8|A8B8G8R8|X8R8G8B8|R8G8B8)$' { return [pscustomobject]@{ Status = 'AC compatible'; Color = [Drawing.Color]::Empty; Detail = 'DDS format is usable in the AC texture workflow; 8.8.8.8 is recommended for sensitive gradients and alpha.' } }
+            '^BC7$' { return [pscustomobject]@{ Status = 'CSP required'; Color = [Drawing.Color]::Plum; Detail = 'Requires Custom Shaders Patch 0.1.74-preview3 (build 1434) or newer.' } }
+            default { return [pscustomobject]@{ Status = 'Check format'; Color = [Drawing.Color]::Khaki; Detail = 'This DDS format is not listed in the standard AC texture guidelines; check game/CSP support.' } }
+        }
+    }
+    if ($extension -in @('.png','.jpg','.jpeg')) {
+        return [pscustomobject]@{ Status = 'DDS recommended'; Color = [Drawing.Color]::LightSkyBlue; Detail = 'The AC editor can use this image type, but DDS is recommended for in-game textures.' }
+    }
+    if ($extension -in @('.tga','.bmp','.tif','.tiff','.hdr')) {
+        $detail = if ($extension -eq '.tga') { 'TGA may import/export in the editor but can crash the game on load. Convert to DDS.' } else { 'This image type is not listed as supported for AC textures. Convert to DDS.' }
+        return [pscustomobject]@{ Status = 'Convert to DDS'; Color = [Drawing.Color]::LightCoral; Detail = $detail }
+    }
+    return [pscustomobject]@{ Status = 'Check format'; Color = [Drawing.Color]::Empty; Detail = 'Compatibility is not classified.' }
+}
+
+function Add-InputFileRow($ListView, [string]$InputFile) {
+    if (-not (Test-Path -LiteralPath $InputFile -PathType Leaf)) { return $false }
+    $fullPath = [IO.Path]::GetFullPath($InputFile)
+    foreach ($existing in $ListView.Items) { if ([string]$existing.Tag -ieq $fullPath) { return $false } }
+    $info = Get-InputFormatInfo $fullPath
+    $resolution = Get-InputResolutionInfo $fullPath
+    $compatibility = Get-AssettoCorsaInputStatus $fullPath $info
+    $fileItem = Get-Item -LiteralPath $fullPath
+    $fileSize = [long]$fileItem.Length
+    if ($fileSize -lt 1KB) { $fileSizeText = "$fileSize B" }
+    elseif ($fileSize -lt 1MB) { $fileSizeText = ([Math]::Round($fileSize / 1KB, 1)).ToString('0.0', [Globalization.CultureInfo]::CurrentCulture) + ' KB' }
+    elseif ($fileSize -lt 1GB) { $fileSizeText = ([Math]::Round($fileSize / 1MB, 1)).ToString('0.0', [Globalization.CultureInfo]::CurrentCulture) + ' MB' }
+    else { $fileSizeText = ([Math]::Round($fileSize / 1GB, 1)).ToString('0.0', [Globalization.CultureInfo]::CurrentCulture) + ' GB' }
+    $row = New-Object Windows.Forms.ListViewItem([IO.Path]::GetFileName($fullPath))
+    [void]$row.SubItems.Add($info.Label)
+    [void]$row.SubItems.Add($resolution.Text)
+    $sizeSubItem = $row.SubItems.Add($fileSizeText)
+    $sizeSubItem.Tag = $fileSize
+    $dateSubItem = $row.SubItems.Add($fileItem.LastWriteTime.ToString('yyyy-MM-dd HH:mm'))
+    $dateSubItem.Tag = [long]$fileItem.LastWriteTime.Ticks
+    [void]$row.SubItems.Add($fullPath)
+    [void]$row.SubItems.Add($compatibility.Status)
+    $row.Tag = $fullPath
+    $row.UseItemStyleForSubItems = $false
+    $row.ToolTipText = "$fullPath`r`nFormat: $($info.Detail)`r`nResolution: $($resolution.Detail)`r`n$($compatibility.Detail)"
+    if ($compatibility.Color -ne [Drawing.Color]::Empty) { $row.BackColor = $compatibility.Color }
+    if ($resolution.Known -and -not $resolution.IsBlockAligned) { $row.SubItems[2].BackColor = [Drawing.Color]::LightCoral }
+    [void]$ListView.Items.Add($row)
+    return $true
+}
+
+function Get-DroppedSupportedFilePaths([string]$DroppedPath) {
+    $supportedExtensions = $script:SupportedInputExtensions
+    $path = [IO.Path]::GetFullPath($DroppedPath)
+    if ([IO.File]::Exists($path)) {
+        if ([IO.Path]::GetExtension($path).ToLowerInvariant() -in $supportedExtensions) { return ,$path }
+        return @()
+    }
+    if (-not [IO.Directory]::Exists($path)) { return @() }
+
+    $results = New-Object 'System.Collections.Generic.List[string]'
+    $pending = New-Object 'System.Collections.Generic.Stack[string]'
+    $visited = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $pending.Push($path)
+    while ($pending.Count -gt 0) {
+        $directory = $pending.Pop()
+        if (-not $visited.Add($directory)) { continue }
+        try {
+            foreach ($file in [IO.Directory]::GetFiles($directory)) {
+                if ([IO.Path]::GetExtension($file).ToLowerInvariant() -in $supportedExtensions) { $results.Add($file) }
+            }
+        } catch { }
+        try {
+            foreach ($child in [IO.Directory]::GetDirectories($directory)) {
+                try {
+                    if (([IO.File]::GetAttributes($child) -band [IO.FileAttributes]::ReparsePoint) -eq 0) { $pending.Push($child) }
+                } catch { }
+            }
+        } catch { }
+    }
+    return $results.ToArray()
+}
+
 function Get-A8L8InputSwizzle([string]$InputFile) {
     if ([IO.Path]::GetExtension($InputFile) -ine '.dds') { return 'ra' }
     $stream = [IO.File]::OpenRead($InputFile)
@@ -350,7 +602,7 @@ function Convert-AllZeroAlphaTgaToPng([string]$InputFile, [string]$OutputFile) {
     return $true
 }
 
-function Invoke-Conversion([string[]]$Files, [string]$DxgiFormat, [string]$OutDir, [string]$MipSetting, [bool]$OverwriteExisting = $false, [bool]$BackupExisting = $false, [bool]$PerSourceSubfolder = $false) {
+function Invoke-Conversion([string[]]$Files, [string]$DxgiFormat, [string]$OutDir, [string]$MipSetting, [bool]$OverwriteExisting = $false, [bool]$BackupExisting = $false, [bool]$PerSourceSubfolder = $false, [int]$MaxDimension = 0) {
     $texconv = Find-Texconv
     if (-not $texconv) { throw 'texconv.exe was not found. Install Microsoft DirectXTex Texconv (see README).' }
     $forceOpaque = $DxgiFormat -eq 'BC7_OPAQUE'
@@ -373,10 +625,19 @@ function Invoke-Conversion([string[]]$Files, [string]$DxgiFormat, [string]$OutDi
         $expandA8L8Luminance = Test-ExpandA8L8Luminance $DxgiFormat $a8l8Source
         $swizzle = Resolve-TexconvSwizzle $DxgiFormat $forceOpaque
         if ($DxgiFormat -eq 'A8L8') { $swizzle = Get-A8L8InputSwizzle $file }
-        $jobs += [pscustomobject]@{ Input = $file; OutputDirectory = $fileOutDir; OutputFile = $outputFile; Swizzle = $swizzle; ExpandA8L8Luminance = $expandA8L8Luminance }
+        $resizeWidth = 0; $resizeHeight = 0
+        if ($MaxDimension -gt 0) {
+            $resolution = Get-InputResolutionInfo $file
+            if ($resolution.Known -and [Math]::Max($resolution.Width, $resolution.Height) -gt $MaxDimension) {
+                $scale = $MaxDimension / [double][Math]::Max($resolution.Width, $resolution.Height)
+                $resizeWidth = [Math]::Max(1, [int][Math]::Round($resolution.Width * $scale))
+                $resizeHeight = [Math]::Max(1, [int][Math]::Round($resolution.Height * $scale))
+            }
+        }
+        $jobs += [pscustomobject]@{ Input = $file; OutputDirectory = $fileOutDir; OutputFile = $outputFile; Swizzle = $swizzle; ExpandA8L8Luminance = $expandA8L8Luminance; ResizeWidth = $resizeWidth; ResizeHeight = $resizeHeight }
     }
     $texconvFormat = if ($DxgiFormat -eq 'A8L8') { 'R8G8_UNORM' } else { $DxgiFormat }
-    foreach ($group in @($jobs | Group-Object OutputDirectory, Swizzle, ExpandA8L8Luminance)) {
+    foreach ($group in @($jobs | Group-Object OutputDirectory, Swizzle, ExpandA8L8Luminance, ResizeWidth, ResizeHeight)) {
         $groupJobs = @($group.Group)
         $outputDirectory = $groupJobs[0].OutputDirectory
         $stageDir = Join-Path $outputDirectory ('.DDSForge-tmp-' + [Guid]::NewGuid().ToString('N'))
@@ -392,6 +653,9 @@ function Invoke-Conversion([string[]]$Files, [string]$DxgiFormat, [string]$OutDi
                 $texconvInputs += $inputForTexconv
             }
             $texconvArgs = @('-nologo', '-f', $texconvFormat, '-m', $mipCount, '-ft', 'dds', '-o', $stageDir)
+            if ($groupJobs[0].ResizeWidth -gt 0 -and $groupJobs[0].ResizeHeight -gt 0) {
+                $texconvArgs += @('-w', [string]$groupJobs[0].ResizeWidth, '-h', [string]$groupJobs[0].ResizeHeight)
+            }
             if ($DxgiFormat -eq 'A8L8') { $texconvArgs += '-dx9' }
             if ($groupJobs[0].ExpandA8L8Luminance) { $texconvArgs += '-xlum' }
             $swizzle = [string]$groupJobs[0].Swizzle
@@ -468,8 +732,8 @@ namespace DdsForge {
     }
     $form = New-Object Windows.Forms.Form
 $form.Text = 'AC Texture Converter'
-    $form.Size = New-Object Drawing.Size(680, 560)
-    $form.MinimumSize = New-Object Drawing.Size(600, 540)
+    $form.Size = New-Object Drawing.Size(680, 580)
+    $form.MinimumSize = New-Object Drawing.Size(600, 560)
     $form.StartPosition = 'CenterScreen'
     $form.Font = New-Object Drawing.Font('Segoe UI', 9)
 
@@ -481,37 +745,160 @@ $title.Text = 'AC Texture Converter'
     $sub.Text = 'Drop DDS or image files here, generate mipmaps, and preserve transparency.'
     $sub.Location = New-Object Drawing.Point(24, 54); $sub.Size = New-Object Drawing.Size(610, 24)
 
-    $list = New-Object Windows.Forms.ListBox
+    $list = New-Object Windows.Forms.ListView
     $list.Location = New-Object Drawing.Point(24, 92); $list.Size = New-Object Drawing.Size(490, 160)
-    $list.Anchor = 'Top,Left,Right'
+    $list.Anchor = 'Top,Left'
+    $list.View = [Windows.Forms.View]::Details
+    $list.FullRowSelect = $true; $list.MultiSelect = $true; $list.HideSelection = $false; $list.GridLines = $true; $list.ShowItemToolTips = $true
+    [void]$list.Columns.Add('File name', 135)
+    [void]$list.Columns.Add('Input format', 95)
+    [void]$list.Columns.Add('Resolution', 75)
+    [void]$list.Columns.Add('File size', 75)
+    [void]$list.Columns.Add('Modified', 125)
+    [void]$list.Columns.Add('File path', 250)
+    [void]$list.Columns.Add('AC compatibility', 105)
+    $list.AllowColumnReorder = $true
     $list.AllowDrop = $true
-    $InitialFiles | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | ForEach-Object { [void]$list.Items.Add($_) }
-    $add = New-Object Windows.Forms.Button; $add.Text = 'Add files…'; $add.Location = New-Object Drawing.Point(530, 92); $add.Size = New-Object Drawing.Size(105, 32)
-    $remove = New-Object Windows.Forms.Button; $remove.Text = 'Remove'; $remove.Location = New-Object Drawing.Point(530, 132); $remove.Size = New-Object Drawing.Size(105, 32)
-    $clear = New-Object Windows.Forms.Button; $clear.Text = 'Clear'; $clear.Location = New-Object Drawing.Point(530, 172); $clear.Size = New-Object Drawing.Size(105, 32)
+    $InitialFiles | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | ForEach-Object { [void](Add-InputFileRow $list $_) }
+    $sortState = @{ Column = -1; Ascending = $true }
+    $headerNames = @('File name','Input format','Resolution','File size','Modified','File path','AC compatibility')
+    $list.Add_ColumnClick({
+        param($sender, $e)
+        if ($sortState.Column -eq $e.Column) { $sortState.Ascending = -not $sortState.Ascending } else { $sortState.Column = $e.Column; $sortState.Ascending = $true }
+        $sender.ListViewItemSorter = New-Object ACTextureListComparer([int]$e.Column, [bool]$sortState.Ascending)
+        $sender.Sort()
+        for ($column = 0; $column -lt $headerNames.Count; $column++) { $sender.Columns[$column].Text = $headerNames[$column] }
+        $arrow = if ($sortState.Ascending) { ' ▲' } else { ' ▼' }
+        $sender.Columns[$e.Column].Text = $headerNames[$e.Column] + $arrow
+        & $updateCompatibilityColumnWidth
+        & $updateContentColumnWidths
+    })
+    $add = New-Object Windows.Forms.Button; $add.Text = 'Add files…'; $add.Location = New-Object Drawing.Point(530, 92); $add.Size = New-Object Drawing.Size(105, 32); $add.Anchor = 'Top,Left'
+    $reload = New-Object Windows.Forms.Button; $reload.Text = 'Reload files'; $reload.Location = New-Object Drawing.Point(530, 132); $reload.Size = New-Object Drawing.Size(105, 32); $reload.Anchor = 'Top,Left'
+    $remove = New-Object Windows.Forms.Button; $remove.Text = 'Remove'; $remove.Location = New-Object Drawing.Point(530, 172); $remove.Size = New-Object Drawing.Size(105, 32); $remove.Anchor = 'Top,Left'
+    $clear = New-Object Windows.Forms.Button; $clear.Text = 'Clear'; $clear.Location = New-Object Drawing.Point(530, 212); $clear.Size = New-Object Drawing.Size(105, 32); $clear.Anchor = 'Top,Left'
+    $convertButtonState = @{ IsConverting = $false }
+    $updateConvertButtonText = {
+        if ($list.SelectedItems.Count -gt 0) { $go.Text = 'Convert selected' } else { $go.Text = 'Convert all' }
+        $go.Enabled = ($list.Items.Count -gt 0 -and -not $convertButtonState.IsConverting)
+    }
+    $list.Add_ItemSelectionChanged({ & $updateConvertButtonText })
 
     $fmtLabel = New-Object Windows.Forms.Label; $fmtLabel.Text = 'Output format'; $fmtLabel.Location = New-Object Drawing.Point(24, 270); $fmtLabel.Size = New-Object Drawing.Size(90, 22)
     $format = New-Object Windows.Forms.ComboBox; $format.Location = New-Object Drawing.Point(120, 266); $format.Size = New-Object Drawing.Size(315, 28); $format.DropDownStyle = 'DropDownList'
     foreach ($name in $script:Formats.Keys) { [void]$format.Items.Add($name) }; $format.SelectedItem = 'BC7 RGBA (preserve alpha)'
     $settingsButton = New-Object Windows.Forms.Button; $settingsButton.Text = 'Settings…'; $settingsButton.Location = New-Object Drawing.Point(450, 265); $settingsButton.Size = New-Object Drawing.Size(90, 29)
-    $formatHint = New-Object Windows.Forms.Label; $formatHint.Location = New-Object Drawing.Point(120, 297); $formatHint.Size = New-Object Drawing.Size(515, 38); $formatHint.ForeColor = [Drawing.Color]::FromArgb(85, 85, 85)
+    $formatHint = New-Object Windows.Forms.Label; $formatHint.Location = New-Object Drawing.Point(120, 297); $formatHint.Size = New-Object Drawing.Size(515, 54); $formatHint.ForeColor = [Drawing.Color]::FromArgb(85, 85, 85)
     $updateFormatHint = { $selected = $script:Formats[$format.SelectedItem]; $formatHint.Text = $script:FormatHints[$selected] }
     $format.add_SelectedIndexChanged($updateFormatHint)
     & $updateFormatHint
-    $mipLabel = New-Object Windows.Forms.Label; $mipLabel.Text = 'Mipmaps'; $mipLabel.Location = New-Object Drawing.Point(24, 344); $mipLabel.Size = New-Object Drawing.Size(90, 22)
-    $mips = New-Object Windows.Forms.ComboBox; $mips.Location = New-Object Drawing.Point(120, 340); $mips.Size = New-Object Drawing.Size(190, 28); $mips.DropDownStyle = 'DropDownList'
+    $mipLabel = New-Object Windows.Forms.Label; $mipLabel.Text = 'Mipmaps'; $mipLabel.Location = New-Object Drawing.Point(24, 360); $mipLabel.Size = New-Object Drawing.Size(90, 22)
+    $mips = New-Object Windows.Forms.ComboBox; $mips.Location = New-Object Drawing.Point(120, 356); $mips.Size = New-Object Drawing.Size(190, 28); $mips.DropDownStyle = 'DropDownList'
     @('Full chain','None','4 levels','8 levels') | ForEach-Object { [void]$mips.Items.Add($_) }; $mips.SelectedIndex = 0
-    $outLabel = New-Object Windows.Forms.Label; $outLabel.Text = 'Output folder'; $outLabel.Location = New-Object Drawing.Point(24, 385); $outLabel.Size = New-Object Drawing.Size(90, 22)
-    $outLabelToolTip = New-Object Windows.Forms.ToolTip; $outLabelToolTip.SetToolTip($outLabel, 'Leave blank to save each converted file beside its source file.')
-    $outBox = New-Object Windows.Forms.TextBox; $outBox.Location = New-Object Drawing.Point(120, 381); $outBox.Size = New-Object Drawing.Size(395, 25); $outBox.Anchor = 'Top,Left,Right'; $outBox.Text = 'Source folder'; $outBox.ForeColor = [Drawing.Color]::Gray
+    $resizeEnabled = New-Object Windows.Forms.CheckBox; $resizeEnabled.Text = 'Limit resolution'; $resizeEnabled.Location = New-Object Drawing.Point(330, 358); $resizeEnabled.Size = New-Object Drawing.Size(112, 22)
+    $maxDimension = New-Object Windows.Forms.ComboBox; $maxDimension.Location = New-Object Drawing.Point(445, 356); $maxDimension.Size = New-Object Drawing.Size(100, 28); $maxDimension.DropDownStyle = 'DropDownList'
+    @('4096 px','2048 px','1024 px','512 px','256 px') | ForEach-Object { [void]$maxDimension.Items.Add($_) }; $maxDimension.SelectedItem = '2048 px'; $maxDimension.Enabled = $false
+    $resizeToolTip = New-Object Windows.Forms.ToolTip; $resizeToolTip.AutoPopDelay = 12000; $resizeToolTip.InitialDelay = 450; $resizeToolTip.ReshowDelay = 150; $resizeToolTip.ShowAlways = $true
+    $resizeToolTip.SetToolTip($resizeEnabled, 'Reduces images whose longest side exceeds the selected pixel limit. The aspect ratio is preserved, and smaller images are not enlarged.')
+    $resizeToolTip.SetToolTip($maxDimension, 'Maximum length of the image''s longest side, in pixels.')
+    $resizeEnabled.Add_CheckedChanged({ $maxDimension.Enabled = $resizeEnabled.Checked })
+    $outLabel = New-Object Windows.Forms.Label; $outLabel.Text = 'Output folder'; $outLabel.Location = New-Object Drawing.Point(24, 401); $outLabel.Size = New-Object Drawing.Size(90, 22)
+    $outLabelToolTip = New-Object Windows.Forms.ToolTip; $outLabelToolTip.SetToolTip($outLabel, 'Source folder saves each DDS beside its source image. Choose another folder to keep converted files separate.')
+    $outBox = New-Object Windows.Forms.TextBox; $outBox.Location = New-Object Drawing.Point(120, 397); $outBox.Size = New-Object Drawing.Size(395, 25); $outBox.Anchor = 'Top,Left'; $outBox.Text = 'Source folder'; $outBox.ForeColor = [Drawing.Color]::Gray
     $outBox.Add_Enter({ if ($outBox.Text -eq 'Source folder') { $outBox.Clear(); $outBox.ForeColor = [Drawing.SystemColors]::WindowText } })
     $outBox.Add_Leave({ if ([string]::IsNullOrWhiteSpace($outBox.Text)) { $outBox.Text = 'Source folder'; $outBox.ForeColor = [Drawing.Color]::Gray } })
-    $browse = New-Object Windows.Forms.Button; $browse.Text = '…'; $browse.Location = New-Object Drawing.Point(530, 378); $browse.Size = New-Object Drawing.Size(105, 30)
-    $overwrite = New-Object Windows.Forms.CheckBox; $overwrite.Text = 'Overwrite existing output files'; $overwrite.Location = New-Object Drawing.Point(120, 414); $overwrite.Size = New-Object Drawing.Size(230, 24)
-    $backup = New-Object Windows.Forms.CheckBox; $backup.Text = 'Move replaced files to Backup folder'; $backup.Location = New-Object Drawing.Point(360, 414); $backup.Size = New-Object Drawing.Size(275, 24); $backup.Enabled = $false
+    $browse = New-Object Windows.Forms.Button; $browse.Text = '…'; $browse.Location = New-Object Drawing.Point(530, 394); $browse.Size = New-Object Drawing.Size(45, 30); $browse.Anchor = 'Top,Left'
+    $sourceFolderButton = New-Object Windows.Forms.Button; $sourceFolderButton.Text = 'Source'; $sourceFolderButton.Location = New-Object Drawing.Point(580, 394); $sourceFolderButton.Size = New-Object Drawing.Size(55, 30); $sourceFolderButton.Anchor = 'Top,Left'
+    $overwrite = New-Object Windows.Forms.CheckBox; $overwrite.Text = 'Overwrite existing destination files'; $overwrite.Location = New-Object Drawing.Point(120, 430); $overwrite.Size = New-Object Drawing.Size(255, 24)
+    $overwriteToolTip = New-Object Windows.Forms.ToolTip; $overwriteToolTip.SetToolTip($overwrite, 'In Source folder mode, this can replace existing source DDS files. With another folder, only matching files already in that destination are replaced; the source files stay untouched.')
+    $backup = New-Object Windows.Forms.CheckBox; $backup.Text = 'Move replaced files to Backup folder'; $backup.Location = New-Object Drawing.Point(380, 430); $backup.Size = New-Object Drawing.Size(255, 24); $backup.Enabled = $false
+    $backupToolTip = New-Object Windows.Forms.ToolTip; $backupToolTip.AutoPopDelay = 12000; $backupToolTip.InitialDelay = 450; $backupToolTip.ReshowDelay = 150; $backupToolTip.ShowAlways = $true
+    $backupToolTip.SetToolTip($backup, 'A Backup subfolder is created inside the selected output folder, or inside each source folder when Source folder is selected. Replaced files are moved there.')
+    $updateOverwriteLabel = { if ([string]::IsNullOrWhiteSpace($outBox.Text) -or $outBox.Text -eq 'Source folder') { $overwrite.Text = 'Overwrite files in source folder' } else { $overwrite.Text = 'Overwrite files in output folder' } }
+    $outBox.Add_TextChanged({ & $updateOverwriteLabel })
+    & $updateOverwriteLabel
     $overwrite.Add_CheckedChanged({ $backup.Enabled = $overwrite.Checked; if (-not $overwrite.Checked) { $backup.Checked = $false } })
-    $status = New-Object Windows.Forms.Label; $status.Text = 'Ready'; $status.Location = New-Object Drawing.Point(24, 472); $status.Size = New-Object Drawing.Size(400, 24); $status.Anchor = 'Bottom,Left,Right'
-    $go = New-Object Windows.Forms.Button; $go.Text = 'Convert'; $go.Location = New-Object Drawing.Point(492, 465); $go.Size = New-Object Drawing.Size(143, 38); $go.Anchor = 'Bottom,Right'; $go.BackColor = [Drawing.Color]::FromArgb(35, 105, 190); $go.ForeColor = [Drawing.Color]::White
+    $updateCompatibilityColumnWidth = {
+        $column = $list.Columns[6]
+        $widest = [Windows.Forms.TextRenderer]::MeasureText($column.Text, $list.Font).Width
+        foreach ($item in $list.Items) {
+            if ($item.SubItems.Count -gt 6) {
+                $textWidth = [Windows.Forms.TextRenderer]::MeasureText([string]$item.SubItems[6].Text, $list.Font).Width
+                if ($textWidth -gt $widest) { $widest = $textWidth }
+            }
+        }
+        $column.Width = [Math]::Max(105, $widest + 24)
+    }
+    $updateContentColumnWidths = {
+        foreach ($columnIndex in @(1, 2, 3, 4)) {
+            $column = $list.Columns[$columnIndex]
+            $widest = [Windows.Forms.TextRenderer]::MeasureText($column.Text, $list.Font).Width
+            foreach ($item in $list.Items) {
+                if ($item.SubItems.Count -gt $columnIndex) {
+                    $textWidth = [Windows.Forms.TextRenderer]::MeasureText([string]$item.SubItems[$columnIndex].Text, $list.Font).Width
+                    if ($textWidth -gt $widest) { $widest = $textWidth }
+                }
+            }
+            $column.Width = [Math]::Max(60, $widest + 24)
+        }
+    }
+    $totalSize = New-Object Windows.Forms.Label; $totalSize.Location = New-Object Drawing.Point(24, 462); $totalSize.Size = New-Object Drawing.Size(420, 22); $totalSize.Anchor = 'Bottom,Left'; $totalSize.ForeColor = [Drawing.Color]::FromArgb(75, 75, 75)
+    $updateTotalSize = {
+        [long]$totalBytes = 0
+        foreach ($item in $list.Items) { $totalBytes += [long]$item.SubItems[3].Tag }
+        if ($totalBytes -lt 1KB) { $totalText = "$totalBytes B" }
+        elseif ($totalBytes -lt 1MB) { $totalText = ([Math]::Round($totalBytes / 1KB, 1)).ToString('0.0', [Globalization.CultureInfo]::CurrentCulture) + ' KB' }
+        elseif ($totalBytes -lt 1GB) { $totalText = ([Math]::Round($totalBytes / 1MB, 1)).ToString('0.0', [Globalization.CultureInfo]::CurrentCulture) + ' MB' }
+        else { $totalText = ([Math]::Round($totalBytes / 1GB, 2)).ToString('0.00', [Globalization.CultureInfo]::CurrentCulture) + ' GB' }
+        $totalSize.Text = "Total file size ($($list.Items.Count) files): $totalText"
+        & $updateCompatibilityColumnWidth
+        & $updateContentColumnWidths
+    }
+    & $updateTotalSize
+    $status = New-Object Windows.Forms.Label; $status.Text = 'Ready'; $status.Location = New-Object Drawing.Point(24, 492); $status.Size = New-Object Drawing.Size(400, 24); $status.Anchor = 'Bottom,Left'
+    $go = New-Object Windows.Forms.Button; $go.Text = 'Convert all'; $go.Location = New-Object Drawing.Point(470, 485); $go.Size = New-Object Drawing.Size(165, 38); $go.Anchor = 'Bottom,Right'; $go.BackColor = [Drawing.Color]::FromArgb(35, 105, 190); $go.ForeColor = [Drawing.Color]::White
+    $mainToolTip = New-Object Windows.Forms.ToolTip
+    $mainToolTip.AutoPopDelay = 12000; $mainToolTip.InitialDelay = 450; $mainToolTip.ReshowDelay = 150; $mainToolTip.ShowAlways = $true
+    $mainToolTip.SetToolTip($list, 'Drop supported files or folders here. Hover a file row to see its full path and file details.')
+    $mainToolTip.SetToolTip($add, 'Choose DDS or supported image files. Multiple files can be selected at once.')
+    $mainToolTip.SetToolTip($reload, 'Refresh file details and remove files that no longer exist.')
+    $mainToolTip.SetToolTip($remove, 'Remove the selected rows from this conversion list. The files on disk are not changed.')
+    $mainToolTip.SetToolTip($clear, 'Remove every row from the conversion list. The files on disk are not changed.')
+    $mainToolTip.SetToolTip($format, 'Choose the DDS compression format. Hover the description below for format details.')
+    $mainToolTip.SetToolTip($settingsButton, 'Choose which output formats appear in this list.')
+    $mainToolTip.SetToolTip($mips, 'Choose how many mipmap levels to create. A full chain continues down to 1×1 pixels.')
+    $mainToolTip.SetToolTip($outBox, 'Choose a destination folder, or use Source folder to save each DDS beside its input file.')
+    $mainToolTip.SetToolTip($browse, 'Choose an output folder.')
+    $mainToolTip.SetToolTip($sourceFolderButton, 'Set the output location to the folder containing each input file.')
+    $mainToolTip.SetToolTip($totalSize, 'Sum of the input file sizes currently listed. This is not the predicted size of the converted DDS files.')
+    $mainToolTip.SetToolTip($status, 'Shows the current action and the result of the last operation.')
+    $mainToolTip.SetToolTip($go, 'Convert the selected rows, or the whole list if nothing is selected, using the chosen output settings.')
+    & $updateConvertButtonText
+
+    $baseClientHeight = $form.ClientSize.Height
+    $controlsBelowList = @($fmtLabel,$format,$settingsButton,$formatHint,$mipLabel,$mips,$resizeEnabled,$maxDimension,$outLabel,$outBox,$browse,$sourceFolderButton,$overwrite,$backup)
+    $controlBaseTops = @()
+    foreach ($control in $controlsBelowList) { $controlBaseTops += [pscustomobject]@{ Control = $control; Top = $control.Top } }
+    $layoutMainInputs = {
+        $rightColumnLeft = [Math]::Max(420, $form.ClientSize.Width - 24 - $add.Width)
+        $add.Left = $rightColumnLeft
+        $reload.Left = $rightColumnLeft
+        $remove.Left = $rightColumnLeft
+        $clear.Left = $rightColumnLeft
+        $browse.Left = $rightColumnLeft
+        $sourceFolderButton.Left = $rightColumnLeft + 50
+        $list.Width = [Math]::Max(220, $rightColumnLeft - 16 - $list.Left)
+        & $updateCompatibilityColumnWidth
+        & $updateContentColumnWidths
+        $list.Columns[5].Width = 250
+        $list.Columns[0].Width = [Math]::Max(110, $list.ClientSize.Width - $list.Columns[1].Width - $list.Columns[2].Width - $list.Columns[3].Width - $list.Columns[4].Width - $list.Columns[5].Width - $list.Columns[6].Width - 32)
+        $outBox.Width = [Math]::Max(180, $rightColumnLeft - 16 - $outBox.Left)
+        $verticalDelta = [Math]::Max(-40, $form.ClientSize.Height - $baseClientHeight)
+        $list.Height = [Math]::Max(120, 160 + $verticalDelta)
+        foreach ($entry in $controlBaseTops) { $entry.Control.Top = $entry.Top + $verticalDelta }
+    }
+    $form.Add_Resize({ & $layoutMainInputs })
+    & $layoutMainInputs
 
     $fileDragEnter = {
         param($sender, $e)
@@ -520,33 +907,61 @@ $title.Text = 'AC Texture Converter'
     }
     $fileDrop = {
         param($sender, $e)
-        $supportedExtensions = $script:SupportedInputExtensions
         $added = 0
-        foreach ($file in [string[]]$e.Data.GetData([Windows.Forms.DataFormats]::FileDrop)) {
-            if ((Test-Path -LiteralPath $file -PathType Leaf) -and ([IO.Path]::GetExtension($file).ToLowerInvariant() -in $supportedExtensions) -and -not $list.Items.Contains($file)) {
-                [void]$list.Items.Add($file)
-                $added++
-            }
+        $droppedItems = [string[]]$e.Data.GetData([Windows.Forms.DataFormats]::FileDrop)
+        foreach ($droppedPath in $droppedItems) {
+            foreach ($file in (Get-DroppedSupportedFilePaths $droppedPath)) { if (Add-InputFileRow $list $file) { $added++ } }
         }
-        if ($added -gt 0) { $status.Text = "Added $added file(s)." }
+        if ($added -gt 0) { $status.Text = "Added $added file(s) from $($droppedItems.Count) dropped item(s)." }
         else { $status.Text = 'No new supported files were added.' }
+        & $updateTotalSize
+        & $updateConvertButtonText
     }
     $form.AllowDrop = $true
     $form.Add_DragEnter($fileDragEnter); $form.Add_DragDrop($fileDrop)
     $list.Add_DragEnter($fileDragEnter); $list.Add_DragDrop($fileDrop)
 
-    $add.Add_Click({ $dialog = New-Object Windows.Forms.OpenFileDialog; $dialog.Filter = 'DDS files (*.dds)|*.dds|Supported images|*.dds;*.png;*.tga;*.bmp;*.jpg;*.jpeg;*.tif;*.tiff;*.hdr|All files (*.*)|*.*'; $dialog.Multiselect = $true; if ($dialog.ShowDialog() -eq 'OK') { foreach ($f in $dialog.FileNames) { if (-not $list.Items.Contains($f)) { [void]$list.Items.Add($f) } } } })
-    $remove.Add_Click({ while ($list.SelectedIndices.Count -gt 0) { $list.Items.RemoveAt($list.SelectedIndices[0]) } })
-    $clear.Add_Click({ $list.Items.Clear() })
-    $browse.Add_Click({ $dialog = New-Object Windows.Forms.FolderBrowserDialog; if ($dialog.ShowDialog() -eq 'OK') { $outBox.Text = $dialog.SelectedPath } })
+    $add.Add_Click({ $dialog = New-Object Windows.Forms.OpenFileDialog; $dialog.Filter = 'DDS files (*.dds)|*.dds|Supported images|*.dds;*.png;*.tga;*.bmp;*.jpg;*.jpeg;*.tif;*.tiff;*.hdr|All files (*.*)|*.*'; $dialog.Multiselect = $true; if ($dialog.ShowDialog() -eq 'OK') { foreach ($f in $dialog.FileNames) { [void](Add-InputFileRow $list $f) }; & $updateTotalSize; & $updateConvertButtonText } })
+    $reload.Add_Click({
+        try {
+            $paths = @($list.Items | ForEach-Object { [string]$_.Tag })
+            $selectedPaths = @($list.SelectedItems | ForEach-Object { [string]$_.Tag })
+            $previousCount = $paths.Count
+            $sorter = $list.ListViewItemSorter
+            $script:DdsFormatCache.Clear()
+            $script:ResolutionCache.Clear()
+            $list.BeginUpdate()
+            try {
+                $list.Items.Clear()
+                foreach ($path in $paths) { [void](Add-InputFileRow $list $path) }
+                if ($sorter) { $list.ListViewItemSorter = $sorter; $list.Sort() }
+                foreach ($item in $list.Items) { if ($selectedPaths -contains [string]$item.Tag) { $item.Selected = $true } }
+            } finally { $list.EndUpdate() }
+            if ($list.Items.Count -lt $previousCount) { $status.Text = "Reloaded $($list.Items.Count) of $previousCount file(s); missing files were removed." }
+            else { $status.Text = "Reloaded $($list.Items.Count) file(s)." }
+            & $updateTotalSize
+            & $updateConvertButtonText
+        } catch { $status.Text = 'Reload failed.'; [Windows.Forms.MessageBox]::Show($_.Exception.Message, 'AC Texture Converter', 'OK', 'Error') | Out-Null }
+    })
+    $remove.Add_Click({ foreach ($row in @($list.SelectedItems)) { $list.Items.Remove($row) }; & $updateTotalSize; & $updateConvertButtonText })
+    $clear.Add_Click({ $list.Items.Clear(); & $updateTotalSize; & $updateConvertButtonText })
+    $browse.Add_Click({ $dialog = New-Object Windows.Forms.FolderBrowserDialog; if ($outBox.Text -and $outBox.Text -ne 'Source folder' -and (Test-Path -LiteralPath $outBox.Text -PathType Container)) { $dialog.SelectedPath = $outBox.Text }; if ($dialog.ShowDialog() -eq 'OK') { $outBox.Text = $dialog.SelectedPath; $outBox.ForeColor = [Drawing.SystemColors]::WindowText } })
+    $sourceFolderButton.Add_Click({ $outBox.Text = 'Source folder'; $outBox.ForeColor = [Drawing.Color]::Gray })
     $go.Add_Click({
         try {
-            $go.Enabled = $false; $status.Text = 'Converting…'; $form.Refresh()
+            $convertButtonState.IsConverting = $true; & $updateConvertButtonText; $status.Text = 'Converting…'; $form.Refresh()
             if ($list.Items.Count -eq 0) { throw 'Add at least one file.' }
             $mipArg = switch ($mips.SelectedIndex) { 1 { 'none' } 2 { '4' } 3 { '8' } default { 'full' } }
+            $resizeCap = if ($resizeEnabled.Checked) { [int](([string]$maxDimension.SelectedItem) -replace '\D','') } else { 0 }
             $selectedFormat = $script:Formats[$format.SelectedItem]
             $resolvedOutDir = if ([string]::IsNullOrWhiteSpace($outBox.Text) -or $outBox.Text -eq 'Source folder') { '' } else { [IO.Path]::GetFullPath($outBox.Text) }
-            $plannedOutputs = @($list.Items | ForEach-Object { Get-OutputDdsPath ([string]$_) (Resolve-OutputDirectory ([string]$_) $resolvedOutDir) })
+            $selectedRows = @($list.SelectedItems)
+            if ($selectedRows.Count -gt 0) {
+                $inputFiles = @($selectedRows | ForEach-Object { [string]$_.Tag })
+            } else {
+                $inputFiles = @($list.Items | ForEach-Object { [string]$_.Tag })
+            }
+            $plannedOutputs = @($inputFiles | ForEach-Object { Get-OutputDdsPath $_ (Resolve-OutputDirectory $_ $resolvedOutDir) })
             $existingOutputs = @($plannedOutputs | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
             if ($existingOutputs.Count -gt 0) {
                 if (-not $overwrite.Checked) { throw 'One or more output files already exist. Enable overwrite or choose a different output folder.' }
@@ -556,11 +971,11 @@ $title.Text = 'AC Texture Converter'
                 $answer = [Windows.Forms.MessageBox]::Show("These output files already exist and will be replaced:`r`n`r`n$names$more$backupNotice`r`n`r`nContinue?", 'Confirm overwrite', 'YesNo', 'Warning')
                 if ($answer -ne [Windows.Forms.DialogResult]::Yes) { $status.Text = 'Conversion cancelled.'; return }
             }
-            $n = Invoke-Conversion @($list.Items) $selectedFormat $resolvedOutDir $mipArg $overwrite.Checked $backup.Checked
+            $n = Invoke-Conversion $inputFiles $selectedFormat $resolvedOutDir $mipArg $overwrite.Checked $backup.Checked $false $resizeCap
             $status.Text = "Created $n file(s) successfully."
 [Windows.Forms.MessageBox]::Show("Created $n DDS file(s).", 'AC Texture Converter', 'OK', 'Information') | Out-Null
         } catch { $status.Text = 'Conversion failed.'; [Windows.Forms.MessageBox]::Show($_.Exception.Message, 'AC Texture Converter', 'OK', 'Error') | Out-Null }
-        finally { $go.Enabled = $true }
+        finally { $convertButtonState.IsConverting = $false; & $updateConvertButtonText }
     })
     $settingsButton.Add_Click({
         $dialog = New-Object Windows.Forms.Form
@@ -601,7 +1016,7 @@ $dialog.Text = 'AC Texture Converter Settings'; $dialog.Size = New-Object Drawin
         }
         $formatToolTip.Dispose()
     })
-    $form.Controls.AddRange(@($title,$sub,$list,$add,$remove,$clear,$fmtLabel,$format,$settingsButton,$formatHint,$mipLabel,$mips,$outLabel,$outBox,$browse,$overwrite,$backup,$status,$go))
+    $form.Controls.AddRange(@($title,$sub,$list,$add,$reload,$remove,$clear,$fmtLabel,$format,$settingsButton,$formatHint,$mipLabel,$mips,$resizeEnabled,$maxDimension,$outLabel,$outBox,$browse,$sourceFolderButton,$overwrite,$backup,$totalSize,$status,$go))
     $form.Add_Shown({
         $consoleWindow = [DdsForge.NativeWindow]::GetConsoleWindow()
         if ($consoleWindow -ne [IntPtr]::Zero -and [DdsForge.NativeWindow]::IsWindowVisible($consoleWindow)) {
@@ -723,4 +1138,3 @@ if ($InputPath.Count -gt 0 -and -not $OpenWith) {
     catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
 }
 Show-MainWindow $InputPath
-
