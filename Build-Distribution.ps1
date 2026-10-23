@@ -23,7 +23,7 @@ foreach ($name in $required) {
     $path = Join-Path $sourceRoot $name
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required distribution file is missing: $path" }
 }
-foreach ($name in @('AC Texture Converter.exe','ACTextureConverter.ps1','README.txt','texconv.exe','ACTextureConverter.ico','LICENSE','ThirdPartyNotices.txt')) {
+foreach ($name in @('AC Texture Converter.exe','ACTextureConverterShellExtension.dll','ACTextureConverter.ps1','README.txt','texconv.exe','ACTextureConverter.ico','LICENSE','ThirdPartyNotices.txt')) {
     $path = Join-Path $portableRoot $name
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Portable package file is missing: $path" }
 }
@@ -41,3 +41,4 @@ catch {
     Write-Error $_
     throw "Distribution packaging failed. Review the new output folder before removing anything: $distributionRoot"
 }
+

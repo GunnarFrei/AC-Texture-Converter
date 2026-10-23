@@ -1,4 +1,4 @@
-# AC Texture Converter v0.9.1
+# AC Texture Converter v0.9.2
 
 A Windows tool for converting DDS textures and common image files for Assetto Corsa modding workflows.
 
@@ -6,7 +6,7 @@ A Windows tool for converting DDS textures and common image files for Assetto Co
 
 ## Features and formats
 
-- Convert individual files or batches from DDS, PNG, TGA, BMP, JPG/JPEG, TIF/TIFF, and HDR with the GUI, drag and drop, command line, or Explorer context menu.
+- Convert individual files or batches from DDS, PNG, TGA, BMP, JPG/JPEG, TIF/TIFF, and HDR with the GUI, drag and drop, command line, or Explorer context menu. Explorer receives the full selected-file list in one operation.
 - Generate mipmaps and choose how transparency is handled.
 - Choose common AC formats: BC1 (opaque RGB), BC3, BC7 RGBA, opaque BC7, A8L8 (grayscale plus alpha), and uncompressed RGBA8.
 - Enable additional formats in Settings: BC2, BC4, BC5, and BC6H.
@@ -16,7 +16,7 @@ BC7 DDS support is documented for Custom Shaders Patch (CSP) from version 0.1.74
 
 ## Install
 
-1. Download [AC-Texture-Converter-Windows-with-icon.zip](https://github.com/GunnarFrei/AC-Texture-Converter/releases/download/v0.9.1/AC-Texture-Converter-Windows-with-icon.zip) and extract it.
+1. Download [AC-Texture-Converter-Windows-v0.9.2.zip](https://github.com/GunnarFrei/AC-Texture-Converter/releases/download/v0.9.2/AC-Texture-Converter-Windows-v0.9.2.zip) and extract it.
 2. Run `Install-ACTextureConverter.bat` and follow the prompts. The installer sets up the app and its per-user Explorer context menu for all supported input formats.
 3. Right-click a supported texture file to open the AC Texture Converter menu. On Windows 11, it may be under **Show more options**. You can also start the app with `Open-ACTextureConverter.bat`.
 

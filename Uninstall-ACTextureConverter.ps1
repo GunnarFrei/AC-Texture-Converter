@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $roots = @(
-    @{ Path = (Join-Path $env:LOCALAPPDATA 'ACTextureConverter'); Expected = @('ACTextureConverter.ps1','Open-ACTextureConverter.bat','AC Texture Converter.exe','texconv.exe','LICENSE','ThirdPartyNotices.txt') },
+    @{ Path = (Join-Path $env:LOCALAPPDATA 'ACTextureConverter'); Expected = @('ACTextureConverter.ps1','Open-ACTextureConverter.bat','AC Texture Converter.exe','ACTextureConverterShellExtension.dll','texconv.exe','LICENSE','ThirdPartyNotices.txt') },
     @{ Path = (Join-Path $env:LOCALAPPDATA 'DDSForge'); Expected = @('DdsForge.ps1','Open-DDSForge.bat','texconv.exe') }
 )
 foreach ($entry in $roots) {
@@ -31,6 +31,7 @@ if ($extensionKey) {
 }
 $shellRoots += $progIdShellRoots
 $shellRoots = @($shellRoots | Select-Object -Unique)
+$clsidPath = 'HKCU:\Software\Classes\CLSID\{91A658F4-E8EC-4C52-8AD8-51D0FB40561D}'
 $keys = @($supportedInputExtensions | ForEach-Object { "HKCU:\Software\Classes\SystemFileAssociations\$_\shell\ACTextureConverter" })
 $keys += 'HKCU:\Software\Classes\SystemFileAssociations\.dds\shell\DDSForge'
 foreach ($shellRoot in $progIdShellRoots) {
@@ -42,7 +43,15 @@ foreach ($shellRoot in $shellRoots) {
     if (Test-Path -LiteralPath $shellRoot) {
         Get-ChildItem -LiteralPath $shellRoot | Where-Object { $_.PSChildName.StartsWith('ACTextureConverter_',[StringComparison]::OrdinalIgnoreCase) } | Remove-Item -Recurse -Force
     }
+    $associationRoot = $shellRoot -replace '\\shell$',''
+    $handler = Join-Path $associationRoot 'shellex\ContextMenuHandlers\ACTextureConverter'
+    if (Test-Path -LiteralPath $handler) {
+        $owner = (Get-ItemProperty -LiteralPath $handler -Name 'ACTextureConverterOwner' -ErrorAction SilentlyContinue).ACTextureConverterOwner
+        if ($owner -eq 'AC Texture Converter') { Remove-Item -LiteralPath $handler -Recurse -Force }
+    }
 }
+$classOwner = if (Test-Path -LiteralPath $clsidPath) { (Get-ItemProperty -LiteralPath $clsidPath -Name 'ACTextureConverterOwner' -ErrorAction SilentlyContinue).ACTextureConverterOwner } else { '' }
+if ($classOwner -eq 'AC Texture Converter') { Remove-Item -LiteralPath $clsidPath -Recurse -Force }
 $menuDefinitions = @('ACTextureConverter.ContextMenu','ACTextureConverter.ImageContextMenu','ACTextureConverter.ConvertMenu','ACTextureConverter.CopyMenu','ACTextureConverter.OverwriteMenu','ACTextureConverter.OverwriteOriginalMenu','ACTextureConverter.BackupMenu')
 foreach ($definition in $menuDefinitions) {
     $definitionPath = "HKCU:\Software\Classes\$definition"

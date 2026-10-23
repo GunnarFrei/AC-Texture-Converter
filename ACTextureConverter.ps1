@@ -3,6 +3,7 @@ param(
     [string]$Format = 'BC7_UNORM',
     [string]$OutputDirectory = '',
     [string]$Mipmaps = 'full',
+    [string]$InputListFile = '',
     [switch]$Overwrite,
     [switch]$BackupOriginals,
     [switch]$OpenWith,
@@ -15,6 +16,17 @@ param(
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+
+if (-not [string]::IsNullOrWhiteSpace($InputListFile)) {
+    $listPath = [IO.Path]::GetFullPath($InputListFile)
+    if (-not (Test-Path -LiteralPath $listPath -PathType Leaf)) { throw "The Explorer selection list is missing: $listPath" }
+    try {
+        $InputPath = @([IO.File]::ReadAllLines($listPath, (New-Object System.Text.UTF8Encoding($false))) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    } finally {
+        Remove-Item -LiteralPath $listPath -Force -ErrorAction SilentlyContinue
+    }
+    if (-not $InputPath.Count) { throw 'The Explorer selection list contains no file paths.' }
+}
 
 $script:BaseFormats = [ordered]@{
     'BC1 (DXT1, opaque RGB; ignores alpha)' = 'BC1_UNORM'
@@ -135,10 +147,20 @@ function Save-FormatSettings([string[]]$SelectedFormats) {
 
 function Set-ExplorerContextMenu([string]$TargetScript = '') {
     $menuTargets = @(Get-ContextMenuTargets)
-    $shellRoots = @($menuTargets | ForEach-Object { $_.ShellPath })
-    foreach ($shellPath in $shellRoots) {
+    foreach ($target in $menuTargets) {
+        $shellPath = $target.ShellPath
         foreach ($existing in @(Get-ChildItem -LiteralPath $shellPath -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -eq 'ACTextureConverter' -or $_.PSChildName.StartsWith('ACTextureConverter_',[StringComparison]::OrdinalIgnoreCase) })) {
             Remove-Item -LiteralPath $existing.PSPath -Recurse -Force
+        }
+        $associationPath = $shellPath -replace '\\shell$',''
+        $handlerPath = Join-Path $associationPath 'shellex\ContextMenuHandlers\ACTextureConverter'
+        if (Test-Path -LiteralPath $handlerPath) {
+            $handlerOwner = (Get-ItemProperty -LiteralPath $handlerPath -Name 'ACTextureConverterOwner' -ErrorAction SilentlyContinue).ACTextureConverterOwner
+            $handlerClsid = (Get-ItemProperty -LiteralPath $handlerPath -ErrorAction SilentlyContinue).'(default)'
+            if ($handlerOwner -ne 'AC Texture Converter' -and $handlerClsid -ne '{91A658F4-E8EC-4C52-8AD8-51D0FB40561D}') {
+                throw "Refusing to replace an unrelated Explorer handler: $handlerPath"
+            }
+            Remove-Item -LiteralPath $handlerPath -Recurse -Force
         }
     }
     # Remove entries from the previous SubCommands/CommandStore implementation.
@@ -159,61 +181,45 @@ function Set-ExplorerContextMenu([string]$TargetScript = '') {
     }
     $scriptPath = if ([string]::IsNullOrWhiteSpace($TargetScript)) { Join-Path $PSScriptRoot 'ACTextureConverter.ps1' } else { [IO.Path]::GetFullPath($TargetScript) }
     if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) { throw "The context-menu target script does not exist: $scriptPath" }
-    $launcherPath = Join-Path (Split-Path -Parent $scriptPath) 'AC Texture Converter.exe'
-    $useExecutable = Test-Path -LiteralPath $launcherPath -PathType Leaf
-    function Set-ContextLeaf([string]$ParentPath, [string]$Id, [string]$Label, [string]$ScriptArguments, [string]$Executable, [bool]$UseExecutable) {
-        $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("$ParentPath\$Id")
-        $key.SetValue('MUIVerb', $Label, [Microsoft.Win32.RegistryValueKind]::String)
-        # Document lets Explorer invoke the command once per selected file.
-        $key.SetValue('MultiSelectModel', 'Document', [Microsoft.Win32.RegistryValueKind]::String)
-        $commandKey = $key.CreateSubKey('command')
-        if ($UseExecutable) { $commandLine = "`"$Executable`" $ScriptArguments -InputPath `"%1`"" }
-        else { $commandLine = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptPath`" $ScriptArguments -InputPath `"%1`"" }
-        $commandKey.SetValue('', $commandLine, [Microsoft.Win32.RegistryValueKind]::String)
-        $commandKey.Dispose()
-        $key.Dispose()
-    }
-    function New-MenuDefinition([string]$Name) {
-        $definitionPath = "Software\Classes\$Name"
-        $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($definitionPath)
-        $key.SetValue('ACTextureConverterOwner', 'AC Texture Converter', [Microsoft.Win32.RegistryValueKind]::String)
-        $key.Dispose()
-        $shellDefinitionPath = "$definitionPath\shell"
-        [void][Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($shellDefinitionPath)
-        return $shellDefinitionPath
-    }
-    function New-ContextGroup([string]$ParentPath, [string]$Id, [string]$Label, [string]$MenuDefinition) {
-        $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("$ParentPath\$Id")
-        $key.SetValue('MUIVerb', $Label, [Microsoft.Win32.RegistryValueKind]::String)
-        $key.SetValue('ExtendedSubCommandsKey', $MenuDefinition, [Microsoft.Win32.RegistryValueKind]::String)
-        $key.Dispose()
-        return New-MenuDefinition $MenuDefinition
-    }
+    $installRoot = Split-Path -Parent $scriptPath
+    $extensionDll = Join-Path $installRoot 'ACTextureConverterShellExtension.dll'
+    if (-not (Test-Path -LiteralPath $extensionDll -PathType Leaf)) { throw "The Explorer integration is missing: $extensionDll. Rebuild or repair the installation." }
 
-    $rootChildren = New-MenuDefinition 'ACTextureConverter.ContextMenu'
-    # Prefix the internal verb IDs because Explorer enumerates these subcommands
-    # by registry key name and ignores the shell order metadata for this cascade.
-    $backupChildren = New-ContextGroup $rootChildren '01_Backup' 'Overwrite with Backup' 'ACTextureConverter.BackupMenu'
-    $overwriteChildren = New-ContextGroup $rootChildren '02_OverwriteOriginal' 'Overwrite original' 'ACTextureConverter.OverwriteOriginalMenu'
-    Set-ContextLeaf $rootChildren '03_Open' 'Open AC Texture Converter' '-OpenWith' $launcherPath $useExecutable
-    $imageRootChildren = New-MenuDefinition 'ACTextureConverter.ImageContextMenu'
-    $imageConvertChildren = New-ContextGroup $imageRootChildren '01_Convert' 'Convert to DDS-Converted' 'ACTextureConverter.ConvertMenu'
-    Set-ContextLeaf $imageRootChildren '02_Open' 'Open AC Texture Converter' '-OpenWith' $launcherPath $useExecutable
-    foreach ($target in $menuTargets) {
-        $menuDefinition = if ($target.IsDds) { 'ACTextureConverter.ContextMenu' } else { 'ACTextureConverter.ImageContextMenu' }
-        $registryShellPath = $target.ShellPath.Substring('HKCU:\'.Length)
-        $rootKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("$registryShellPath\ACTextureConverter")
-        $rootKey.SetValue('MUIVerb', 'AC Texture Converter', [Microsoft.Win32.RegistryValueKind]::String)
-        $rootKey.SetValue('ExtendedSubCommandsKey', $menuDefinition, [Microsoft.Win32.RegistryValueKind]::String)
-        $rootKey.Dispose()
+    $clsid = '{91A658F4-E8EC-4C52-8AD8-51D0FB40561D}'
+    $clsidPath = "Software\Classes\CLSID\$clsid"
+    $existingClass = "HKCU:\$clsidPath"
+    if (Test-Path -LiteralPath $existingClass) {
+        $owner = (Get-ItemProperty -LiteralPath $existingClass -Name 'ACTextureConverterOwner' -ErrorAction SilentlyContinue).ACTextureConverterOwner
+        if ($owner -ne 'AC Texture Converter') { throw "Refusing to replace an unrelated COM class: $existingClass" }
+        Remove-Item -LiteralPath $existingClass -Recurse -Force
     }
-    foreach ($entry in $script:Formats.GetEnumerator()) {
-        $formatId = $entry.Value -replace '[^A-Za-z0-9_]', '_'
-        $formatName = $entry.Key
-        Set-ContextLeaf $overwriteChildren $formatId $formatName "-ShellMode Overwrite -Format $($entry.Value)" $launcherPath $useExecutable
-        Set-ContextLeaf $backupChildren $formatId $formatName "-ShellMode Backup -Format $($entry.Value)" $launcherPath $useExecutable
-        Set-ContextLeaf $imageConvertChildren $formatId $formatName "-ShellMode Copy -Format $($entry.Value)" $launcherPath $useExecutable
+    $assemblyName = [Reflection.AssemblyName]::GetAssemblyName($extensionDll)
+    $classKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($clsidPath)
+    $classKey.SetValue('', 'AC Texture Converter Explorer Integration', [Microsoft.Win32.RegistryValueKind]::String)
+    $classKey.SetValue('ACTextureConverterOwner', 'AC Texture Converter', [Microsoft.Win32.RegistryValueKind]::String)
+    $classKey.Dispose()
+    $inprocKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("$clsidPath\InprocServer32")
+    $inprocKey.SetValue('', 'mscoree.dll', [Microsoft.Win32.RegistryValueKind]::String)
+    $inprocKey.SetValue('ThreadingModel', 'Both', [Microsoft.Win32.RegistryValueKind]::String)
+    $inprocKey.SetValue('Class', 'ACTextureConverter.ShellExtension', [Microsoft.Win32.RegistryValueKind]::String)
+    $inprocKey.SetValue('Assembly', $assemblyName.FullName, [Microsoft.Win32.RegistryValueKind]::String)
+    $inprocKey.SetValue('RuntimeVersion', 'v4.0.30319', [Microsoft.Win32.RegistryValueKind]::String)
+    $inprocKey.SetValue('CodeBase', ([Uri]$extensionDll).AbsoluteUri, [Microsoft.Win32.RegistryValueKind]::String)
+    $inprocKey.Dispose()
+    foreach ($target in $menuTargets | Where-Object { $_.ShellPath -like 'HKCU:\Software\Classes\SystemFileAssociations\*' }) {
+        $associationPath = $target.ShellPath -replace '\\shell$',''
+        $handlerPath = "$associationPath\shellex\ContextMenuHandlers\ACTextureConverter"
+        $handlerKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($handlerPath.Substring('HKCU:\'.Length))
+        $handlerKey.SetValue('', $clsid, [Microsoft.Win32.RegistryValueKind]::String)
+        $handlerKey.SetValue('ACTextureConverterOwner', 'AC Texture Converter', [Microsoft.Win32.RegistryValueKind]::String)
+        $handlerKey.Dispose()
     }
+    if (-not ('ACTextureConverter.ShellNotify' -as [type])) {
+        Add-Type -Namespace ACTextureConverter -Name ShellNotify -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("shell32.dll")] public static extern void SHChangeNotify(uint eventId, uint flags, System.IntPtr item1, System.IntPtr item2);
+'@
+    }
+    [ACTextureConverter.ShellNotify]::SHChangeNotify(0x08000000, 0, [IntPtr]::Zero, [IntPtr]::Zero)
 }
 Load-FormatSettings
 
@@ -253,6 +259,10 @@ function Get-OutputDdsPath([string]$InputFile, [string]$OutputDirectory) {
 function Resolve-TexconvSwizzle([string]$DxgiFormat, [bool]$ForceOpaque = $false) {
     if ($ForceOpaque -or $DxgiFormat -eq 'BC1_UNORM') { return 'rgb1' }
     return ''
+}
+
+function Test-ExpandA8L8Luminance([string]$DxgiFormat, [bool]$IsA8L8Source) {
+    return ($IsA8L8Source -and $DxgiFormat -in @('BC1_UNORM','BC2_UNORM','BC3_UNORM','BC6H_UF16','BC7_UNORM','R8G8B8A8_UNORM'))
 }
 
 function Resolve-A8L8InputSwizzle([string]$FourCC, [uint32]$DxgiFormat, [uint32]$PixelFlags, [uint32]$BitsPerPixel, [uint32]$RedMask, [uint32]$AlphaMask) {
@@ -359,12 +369,14 @@ function Invoke-Conversion([string[]]$Files, [string]$DxgiFormat, [string]$OutDi
         if (-not $seenOutputs.Add($outputFile)) { throw "Input files share an output name. Nothing was overwritten: $outputFile" }
         if ((Test-Path -LiteralPath $outputFile -PathType Leaf) -and -not $OverwriteExisting) { throw "The output already exists. Enable overwrite to replace it: $outputFile" }
         if (Test-Path -LiteralPath $outputFile -PathType Container) { throw "An output folder already exists with the target filename: $outputFile" }
+        $a8l8Source = (Get-A8L8InputSwizzle $file) -eq 'rg'
+        $expandA8L8Luminance = Test-ExpandA8L8Luminance $DxgiFormat $a8l8Source
         $swizzle = Resolve-TexconvSwizzle $DxgiFormat $forceOpaque
         if ($DxgiFormat -eq 'A8L8') { $swizzle = Get-A8L8InputSwizzle $file }
-        $jobs += [pscustomobject]@{ Input = $file; OutputDirectory = $fileOutDir; OutputFile = $outputFile; Swizzle = $swizzle }
+        $jobs += [pscustomobject]@{ Input = $file; OutputDirectory = $fileOutDir; OutputFile = $outputFile; Swizzle = $swizzle; ExpandA8L8Luminance = $expandA8L8Luminance }
     }
     $texconvFormat = if ($DxgiFormat -eq 'A8L8') { 'R8G8_UNORM' } else { $DxgiFormat }
-    foreach ($group in @($jobs | Group-Object OutputDirectory, Swizzle)) {
+    foreach ($group in @($jobs | Group-Object OutputDirectory, Swizzle, ExpandA8L8Luminance)) {
         $groupJobs = @($group.Group)
         $outputDirectory = $groupJobs[0].OutputDirectory
         $stageDir = Join-Path $outputDirectory ('.DDSForge-tmp-' + [Guid]::NewGuid().ToString('N'))
@@ -381,6 +393,7 @@ function Invoke-Conversion([string[]]$Files, [string]$DxgiFormat, [string]$OutDi
             }
             $texconvArgs = @('-nologo', '-f', $texconvFormat, '-m', $mipCount, '-ft', 'dds', '-o', $stageDir)
             if ($DxgiFormat -eq 'A8L8') { $texconvArgs += '-dx9' }
+            if ($groupJobs[0].ExpandA8L8Luminance) { $texconvArgs += '-xlum' }
             $swizzle = [string]$groupJobs[0].Swizzle
             if ($swizzle) { $texconvArgs += '--swizzle'; $texconvArgs += $swizzle }
             $texconvArgs += '-y'
@@ -628,6 +641,14 @@ if ($SelfTest) {
     & $assert ((Resolve-TexconvSwizzle 'BC1_UNORM') -eq 'rgb1') 'BC1 ignores source alpha before compression'
     & $assert ((Resolve-TexconvSwizzle 'BC7_UNORM' $true) -eq 'rgb1') 'opaque BC7 ignores source alpha before compression'
     & $assert ((Resolve-TexconvSwizzle 'BC7_UNORM' $false) -eq '') 'alpha-preserving BC7 leaves source alpha intact'
+    & $assert (Test-ExpandA8L8Luminance 'BC7_UNORM' $true) 'A8L8 BC7 expands luminance to RGB while preserving alpha through DirectXTex'
+    & $assert (Test-ExpandA8L8Luminance 'BC3_UNORM' $true) 'A8L8 BC3 expands luminance to RGB while preserving alpha through DirectXTex'
+    & $assert (Test-ExpandA8L8Luminance 'R8G8B8A8_UNORM' $true) 'A8L8 RGBA8 expands luminance to RGB while preserving alpha through DirectXTex'
+    & $assert (Test-ExpandA8L8Luminance 'BC1_UNORM' $true) 'A8L8 BC1 expands luminance before opaque compression'
+    & $assert (Test-ExpandA8L8Luminance 'BC7_UNORM' $true) 'A8L8 opaque BC7 expands luminance before opaque compression'
+    & $assert (-not (Test-ExpandA8L8Luminance 'BC7_UNORM' $false)) 'ordinary BC7 input conversion does not expand luminance'
+    & $assert (-not (Test-ExpandA8L8Luminance 'BC4_UNORM' $true)) 'single-channel BC4 remains a single-channel target'
+    & $assert (-not (Test-ExpandA8L8Luminance 'A8L8' $true)) 'A8L8 output retains its native two-channel layout'
     & $assert ((Resolve-A8L8InputSwizzle '' 0 0 0 0 0) -eq 'ra') 'RGBA inputs source A for A8L8 alpha'
     & $assert ((Resolve-A8L8InputSwizzle '' 0 0x20001 16 0xFF 0xFF00) -eq 'rg') 'legacy A8L8 sources preserve their second channel'
     & $assert ((Resolve-A8L8InputSwizzle 'DX10' 49 0 0 0 0) -eq 'rg') 'DXGI R8G8 sources preserve their second channel'

@@ -3,6 +3,8 @@ $ErrorActionPreference = 'Stop'
 $installRoot = Join-Path $env:LOCALAPPDATA 'ACTextureConverter'
 $supportedInputExtensions = @('.dds','.png','.tga','.bmp','.jpg','.jpeg','.tif','.tiff','.hdr')
 $menuKeys = @($supportedInputExtensions | ForEach-Object { "HKCU:\Software\Classes\SystemFileAssociations\$_\shell\ACTextureConverter" })
+$handlerKeys = @($supportedInputExtensions | ForEach-Object { "HKCU:\Software\Classes\SystemFileAssociations\$_\shellex\ContextMenuHandlers\ACTextureConverter" })
+$clsidKey = 'HKCU:\Software\Classes\CLSID\{91A658F4-E8EC-4C52-8AD8-51D0FB40561D}'
 $legacyMenuKey = 'HKCU:\Software\Classes\SystemFileAssociations\.dds\shell\ACTextureConverter'
 $createdRoot = $false
 $createdKey = $false
@@ -16,7 +18,7 @@ try {
     if ((Test-Path -LiteralPath $legacyRoot) -or (Test-Path -LiteralPath $legacyKey)) {
         throw 'A previous DDS Forge installation was found. Run Uninstall-ACTextureConverter.bat to remove its app files and Explorer entry, then install again. Your Texconv package and format settings are kept.'
     }
-    $existingMenus = @($menuKeys | Where-Object { Test-Path -LiteralPath $_ })
+    $existingMenus = @($menuKeys + $handlerKeys | Where-Object { Test-Path -LiteralPath $_ })
     if ($existingMenus.Count -or (Test-Path -LiteralPath $legacyMenuKey)) {
         $existingMenu = if ($existingMenus.Count) { $existingMenus[0] } else { $legacyMenuKey }
         throw "A context-menu entry already exists; nothing was overwritten: $existingMenu. Run Uninstall-ACTextureConverter.bat first."
@@ -28,6 +30,8 @@ try {
     }
     $portableRoot = Join-Path $sourceRoot 'AC Texture Converter Portable'
     $portableExe = Join-Path $sourceRoot 'AC Texture Converter Portable\AC Texture Converter.exe'
+    $portableShellExtension = Join-Path $portableRoot 'ACTextureConverterShellExtension.dll'
+    if (-not (Test-Path -LiteralPath $portableShellExtension -PathType Leaf)) { throw 'The Explorer integration library is missing from the distribution. Rebuild the Windows package.' }
     $localTexconv = Join-Path $sourceRoot 'texconv.exe'
     $portableTexconv = Join-Path $portableRoot 'texconv.exe'
     $wingetLink = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links\texconv.exe'
@@ -76,6 +80,7 @@ try {
     if (Test-Path -LiteralPath $portableExe -PathType Leaf) {
         Copy-Item -LiteralPath $portableExe -Destination (Join-Path $installRoot 'AC Texture Converter.exe')
     }
+    Copy-Item -LiteralPath $portableShellExtension -Destination (Join-Path $installRoot 'ACTextureConverterShellExtension.dll')
     if ($texconvToBundle) { Copy-Item -LiteralPath $texconvToBundle -Destination (Join-Path $installRoot 'texconv.exe') }
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'LICENSE') -Destination $installRoot
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'ThirdPartyNotices.txt') -Destination $installRoot
@@ -90,7 +95,13 @@ try {
 } catch {
     Write-Host ''
     Write-Host "Installation failed: $($_.Exception.Message)" -ForegroundColor Red
-    if ($createdKey) { foreach ($menuKey in $menuKeys) { if (Test-Path -LiteralPath $menuKey) { Remove-Item -LiteralPath $menuKey -Recurse -Force -ErrorAction SilentlyContinue } } }
+    if ($createdKey) {
+        foreach ($menuKey in $menuKeys + $handlerKeys) { if (Test-Path -LiteralPath $menuKey) { Remove-Item -LiteralPath $menuKey -Recurse -Force -ErrorAction SilentlyContinue } }
+        if (Test-Path -LiteralPath $clsidKey) {
+            $owner = (Get-ItemProperty -LiteralPath $clsidKey -Name 'ACTextureConverterOwner' -ErrorAction SilentlyContinue).ACTextureConverterOwner
+            if ($owner -eq 'AC Texture Converter') { Remove-Item -LiteralPath $clsidKey -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+    }
     if ($createdRoot -and (Test-Path -LiteralPath $installRoot)) { Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue }
     if (-not $NoPause) { Write-Host 'Press any key to close this window.'; try { [void][Console]::ReadKey($true) } catch { } }
     exit 1

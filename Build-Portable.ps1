@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 $sourceRoot = $PSScriptRoot
 $packageRoot = Join-Path $sourceRoot 'AC Texture Converter Portable'
 $launcherSource = Join-Path $sourceRoot 'Launcher\ACTextureConverterLauncher.cs'
+$shellExtensionSource = Join-Path $sourceRoot 'Launcher\ACTextureConverterShellExtension.cs'
 $iconBuilder = Join-Path $sourceRoot 'Create-AppIcon.ps1'
 $iconPath = Join-Path $sourceRoot 'Assets\ACTextureConverter.ico'
 $appScript = Join-Path $sourceRoot 'ACTextureConverter.ps1'
@@ -10,6 +11,7 @@ $projectLicense = Join-Path $sourceRoot 'LICENSE'
 $thirdPartyNotices = Join-Path $sourceRoot 'ThirdPartyNotices.txt'
 $targetScript = Join-Path $packageRoot 'ACTextureConverter.ps1'
 $targetExe = Join-Path $packageRoot 'AC Texture Converter.exe'
+$targetShellExtension = Join-Path $packageRoot 'ACTextureConverterShellExtension.dll'
 $targetTexconv = Join-Path $packageRoot 'texconv.exe'
 
 if ((Test-Path -LiteralPath $packageRoot) -and -not $Rebuild) {
@@ -19,7 +21,9 @@ if (-not (Test-Path -LiteralPath $appScript -PathType Leaf)) { throw "App script
 foreach ($licenseFile in @($projectLicense,$thirdPartyNotices)) {
     if (-not (Test-Path -LiteralPath $licenseFile -PathType Leaf)) { throw "License notice not found: $licenseFile" }
 }
-if (-not (Test-Path -LiteralPath $launcherSource -PathType Leaf)) { throw "Launcher source not found: $launcherSource" }
+foreach ($sourceFile in @($launcherSource,$shellExtensionSource)) {
+    if (-not (Test-Path -LiteralPath $sourceFile -PathType Leaf)) { throw "Launcher source not found: $sourceFile" }
+}
 if ($Rebuild) {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $iconBuilder -Force
     if ($LASTEXITCODE -ne 0) { throw "Icon generation failed (exit code $LASTEXITCODE)." }
@@ -46,6 +50,7 @@ $buildRoot = Join-Path ([IO.Path]::GetTempPath()) ('ACTC-build-' + [guid]::NewGu
 New-Item -ItemType Directory -Path $buildRoot | Out-Null
 try {
     $builtExe = Join-Path $buildRoot 'AC Texture Converter.exe'
+    $builtShellExtension = Join-Path $buildRoot 'ACTextureConverterShellExtension.dll'
     $compileArgs = @(
         '/nologo', '/target:winexe', '/platform:x64', '/optimize+',
         "/out:`"$builtExe`"", "/win32icon:`"$iconPath`"", "/reference:System.Windows.Forms.dll", "/reference:System.dll",
@@ -55,9 +60,18 @@ try {
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $builtExe -PathType Leaf)) {
         throw "Launcher compilation failed (exit code $LASTEXITCODE)."
     }
+    $shellCompileArgs = @(
+        '/nologo', '/target:library', '/platform:x64', '/optimize+',
+        "/out:`"$builtShellExtension`"", '/reference:System.dll', '/reference:System.Web.Extensions.dll',
+        "`"$shellExtensionSource`""
+    )
+    & $compiler @shellCompileArgs
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $builtShellExtension -PathType Leaf)) {
+        throw "Explorer extension compilation failed (exit code $LASTEXITCODE)."
+    }
 
     if (Test-Path -LiteralPath $packageRoot) {
-        $allowed = @('AC Texture Converter.exe','ACTextureConverter.ps1','README.txt','texconv.exe','ACTextureConverter.ico','LICENSE','ThirdPartyNotices.txt')
+        $allowed = @('AC Texture Converter.exe','ACTextureConverterShellExtension.dll','ACTextureConverter.ps1','README.txt','texconv.exe','ACTextureConverter.ico','LICENSE','ThirdPartyNotices.txt')
         $unexpected = @(Get-ChildItem -LiteralPath $packageRoot -Force | Where-Object { $_.Name -notin $allowed })
         if ($unexpected.Count) { throw "The output folder contains additional items and was left untouched: $packageRoot" }
         $backupRoot = Join-Path $sourceRoot ('BuildBackups\Portable-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
@@ -74,17 +88,18 @@ try {
     Copy-Item -LiteralPath $projectLicense -Destination (Join-Path $packageRoot 'LICENSE') -Force
     Copy-Item -LiteralPath $thirdPartyNotices -Destination (Join-Path $packageRoot 'ThirdPartyNotices.txt') -Force
     Copy-Item -LiteralPath $builtExe -Destination $targetExe -Force
+    Copy-Item -LiteralPath $builtShellExtension -Destination $targetShellExtension -Force
 
     $readme = @'
-AC Texture Converter v0.9.1 - Portable build
+AC Texture Converter v0.9.2 - Portable build
 
 Run "AC Texture Converter.exe" to open the app. Drop DDS or supported image files onto the window, or use Add files.
 
-Keep this folder together: the executable starts ACTextureConverter.ps1, and texconv.exe performs the texture conversion. Windows PowerShell 5.1 and the Microsoft Visual C++ 2015-2022 x64 runtime are required.
+Keep this folder together: the executable starts ACTextureConverter.ps1, ACTextureConverterShellExtension.dll provides the Explorer multi-file menu, and texconv.exe performs the texture conversion. Windows PowerShell 5.1 and the Microsoft Visual C++ 2015-2022 x64 runtime are required.
 
 AC Texture Converter is licensed under MIT; see LICENSE. Texconv is also MIT-licensed; see ThirdPartyNotices.txt.
 
-The portable copy does not install an Explorer menu entry. To use the existing Explorer integration, run the project's Install-ACTextureConverter.bat. That installation remains separate from this portable folder.
+The portable copy does not register the Explorer menu. Run Install-ACTextureConverter.bat to install the Explorer menu integration.
 '@
     Set-Content -LiteralPath (Join-Path $packageRoot 'README.txt') -Value $readme -Encoding UTF8
     Write-Host "Portable package created: $packageRoot"
