@@ -4,6 +4,10 @@ A Windows tool for converting DDS textures and common image files for Assetto Co
 
 ![AC Texture Converter v0.9.3 showing the file list, format details, and compatibility information](Assets/ACTextureConverter-README.png)
 
+From File Explorer, convert selected DDS files directly with the AC Texture Converter submenu. Choose a format and overwrite action, or open the files in the full converter.
+
+![File Explorer context menu with AC Texture Converter format and overwrite options](Assets/Explorer-Context-Menu.png)
+
 ## Features and formats
 
 - Convert individual files or batches from DDS, PNG, TGA, BMP, JPG/JPEG, TIF/TIFF, and HDR with the GUI, drag and drop, command line, or Explorer context menu. Explorer receives the full selected-file list in one operation.
@@ -30,4 +34,5 @@ To remove the app, run `Uninstall-ACTextureConverter.bat`.
 AC Texture Converter is licensed under the MIT License. See [LICENSE](LICENSE).
 
 The bundled Microsoft DirectXTex `texconv.exe` is also licensed under MIT. Its full notice is in [ThirdPartyNotices.txt](ThirdPartyNotices.txt).
+
 
