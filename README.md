@@ -1,8 +1,8 @@
-# AC Texture Converter v0.9.3
+# AC Texture Converter v0.10.0
 
 A Windows tool for converting DDS textures and common image files for Assetto Corsa modding workflows.
 
-![AC Texture Converter v0.9.3 showing the file list, format details, and compatibility information](Assets/ACTextureConverter-README.png)
+![AC Texture Converter v0.10.0 showing the file list, format details, and compatibility information](Assets/ACTextureConverter-README.png)
 
 From File Explorer, convert selected DDS files directly with the AC Texture Converter submenu. Choose a format and overwrite action, or open the files in the full converter.
 
@@ -21,11 +21,17 @@ From File Explorer, convert selected DDS files directly with the AC Texture Conv
 
 BC7 DDS support is documented for Custom Shaders Patch (CSP) from version 0.1.74-preview3 (build 1434). Earlier CSP versions may not support it. A8L8 is a legacy luminance-plus-alpha DDS format; compatibility can depend on the Assetto Corsa and CSP versions and the texture loading path.
 
+## Work with KN5 textures
+
+Load or drop an unencrypted KN5 to extract its embedded textures into the conversion list. The app supports embedded DDS, PNG, JPG/JPEG, BMP, TGA, TIF/TIFF, and HDR images in KN5 versions 5 and 6. Convert textures with the same format, mipmap, and resolution controls, then choose **Pack KN5** to save a new KN5. You can remove textures before packing or add additional textures. Duplicate texture names are flagged because they can conflict. The source KN5 is never overwritten. Encrypted, malformed, and unsupported KN5 files are marked as not extractable.
+
 ## Install
 
-1. Download [AC-Texture-Converter-Windows-v0.9.3.zip](https://github.com/GunnarFrei/AC-Texture-Converter/releases/download/v0.9.3/AC-Texture-Converter-Windows-v0.9.3.zip) and extract it.
+1. Download [AC-Texture-Converter-Windows-v0.10.0.zip](https://github.com/GunnarFrei/AC-Texture-Converter/releases/download/v0.10.0/AC-Texture-Converter-Windows-v0.10.0.zip) and extract it.
 2. Run `Install-ACTextureConverter.bat` and follow the prompts. The installer sets up the app and its per-user Explorer context menu for all supported input formats.
 3. Right-click a supported texture file to open the AC Texture Converter menu. On Windows 11, it may be under **Show more options**. You can also start the app with `Open-ACTextureConverter.bat`.
+
+To update an existing installation, run `Install-ACTextureConverter.bat` from the new package. It updates the installed app files and re-registers the Explorer menu to use that same installed copy.
 
 To remove the app, run `Uninstall-ACTextureConverter.bat`.
 
@@ -34,5 +40,3 @@ To remove the app, run `Uninstall-ACTextureConverter.bat`.
 AC Texture Converter is licensed under the MIT License. See [LICENSE](LICENSE).
 
 The bundled Microsoft DirectXTex `texconv.exe` is also licensed under MIT. Its full notice is in [ThirdPartyNotices.txt](ThirdPartyNotices.txt).
-
-
