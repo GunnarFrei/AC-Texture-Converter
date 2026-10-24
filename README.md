@@ -2,7 +2,7 @@
 
 A Windows tool for converting DDS textures and common image files for Assetto Corsa modding workflows.
 
-![AC Texture Converter v0.10.0 showing the file list, format details, and compatibility information](Assets/ACTextureConverter-README.png)
+![AC Texture Converter showing the KN5 texture workflow](Assets/ACTextureConverter-KN5-README.png)
 
 From File Explorer, convert selected DDS files directly with the AC Texture Converter submenu. Choose a format and overwrite action, or open the files in the full converter.
 
